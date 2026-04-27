@@ -61,6 +61,7 @@ def write_sleb128(value):
             byte |= 0x80
         out.append(byte)
     return out
+
 def read_uleb128_len(data, pos):
     if data[pos] < 128:
         return 1
@@ -75,4 +76,3 @@ def read_uleb128_len(data, pos):
         while data[p] >= 128:
             p += 1
         return p - pos + 1
-

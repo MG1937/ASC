@@ -1,6 +1,7 @@
 import struct
 import io
 from utils.leb128 import read_uleb128_fast
+import bisect
 
 _STRUCT_I = struct.Struct('<I')
 _STRUCT_H = struct.Struct('<H')
@@ -10,7 +11,9 @@ _STRUCT_HHHHII = struct.Struct('<HHHHII')
 
 class DEXHeader:
     def __init__(self, buf):
+        # 0x3c offset == ids_off, 0x38 offset == ids_size
         self.strings = (_STRUCT_I.unpack_from(buf, 0x3C)[0], _STRUCT_I.unpack_from(buf, 0x38)[0])
+        # 0x44 offset == ids_off, 0x40 offset == ids_size
         self.types = (_STRUCT_I.unpack_from(buf, 0x44)[0], _STRUCT_I.unpack_from(buf, 0x40)[0])
         self.prototypes = (_STRUCT_I.unpack_from(buf, 0x4C)[0], _STRUCT_I.unpack_from(buf, 0x48)[0])
         self.fields = (_STRUCT_I.unpack_from(buf, 0x54)[0], _STRUCT_I.unpack_from(buf, 0x50)[0])
@@ -415,6 +418,15 @@ class DEX:
                 self._classes.append(DexClass(self, class_idx, class_def_off, i))
         return self._classes
 
+    # only return uleb128 prefix byte, only fit class string
+    # we dont care other situation!!!!
+    def _get_uleb128_prefix(self, lens : int):
+        if lens < 128:
+            return bytes([lens])
+        else:
+            # class len never longer then 0x807f!!
+            return bytes([lens | 0x80, lens >> 7])
+
     def get_class(self, fullname):
         off = self.header.classes[0]
         size = self.header.classes[1]
@@ -427,57 +439,33 @@ class DEX:
         if str_size > 0:
             self._init_string_offsets()
             encoded_fullname = fullname.encode('utf-8')
-            encoded_fullname_with_null = encoded_fullname + b'\x00'
+            encoded_fullname_with_null = self._get_uleb128_prefix(len(encoded_fullname)) + encoded_fullname + b'\x00'
             
             # Use Python's built-in fast bytes search
             raw_bytes = self.buf.obj if isinstance(self.buf, memoryview) else self.buf
-            
+            offsets = self._string_offsets
+
             # Since Dalvik uses MUTF-8 and string format is ULEB128 len + MUTF-8 + \x00
             # We can search for the raw bytes
             # Note: The search might match data outside the string pool. So we loop until we find a valid one.
-            idx = 0
-            while True:
-                idx = raw_bytes.find(encoded_fullname_with_null, idx)
-                if idx == -1:
-                    break
-                    
-                # We found a possible match, but we need to find its string index
-                # Binary search over string offsets could work if offsets are sorted
-                # But since they are, we can just do a quick binary search
-                offsets = self._string_offsets
-                left, right = 0, str_size - 1
-                found = False
-                while left <= right:
-                    mid = (left + right) // 2
-                    mid_off = offsets[mid]
-                    if mid_off < idx:
-                        # Check if it's the exact one
-                        utf16_size, c = read_uleb128_fast(self.buf, mid_off)
-                        if mid_off + c == idx:
-                            target_str_idx = mid
-                            found = True
-                            break
-                        left = mid + 1
-                    else:
-                        right = mid - 1
-                
-                if found:
-                    break
-                # If not found, it means it matched something not in string_offsets, search next
-                idx += 1
-        
+            idx = offsets[0]
+            idx = raw_bytes.find(encoded_fullname_with_null, idx)
+            target_str_idx = bisect.bisect_left(offsets, idx)
+
         if target_str_idx == -1:
             return None
-            
-        for i in range(size):
-            class_def_off = off + i * 32
-            class_idx = _STRUCT_I.unpack_from(self.buf, class_def_off)[0]
-            
-            type_off = type_ids_off + class_idx * 4
-            str_idx = _STRUCT_I.unpack_from(self.buf, type_off)[0]
-            
-            if str_idx == target_str_idx:
-                if self._classes is None:
-                    self.classes
-                return self._classes[i]
-        return None
+
+        # descriptor_idx -> type_id_item -> class_def_item
+        desc_idx = target_str_idx.to_bytes(4, 'little')
+
+        # I DONT GIVE SHIT ABOUT DATA MISALIGNMENT!!!
+        # IF I CAN FIND STRING IDX, I MUST CAN FIND TYPE IDX!!!!
+        type_idx = (raw_bytes.find(desc_idx, type_ids_off) - type_ids_off) // 4 # type_id_item len == uint
+        type_idx = type_idx.to_bytes(4, 'little')
+        class_idx = (raw_bytes.find(type_idx, off) - off) // 0x20
+        if class_idx == -1:
+            return None
+        if self._classes is None:
+            self.classes
+        return self._classes[class_idx]
+
