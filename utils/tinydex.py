@@ -305,34 +305,32 @@ class DEX:
         self._fields = None
         self._classes = None
 
+    # lazy parse
     def get_string(self, str_idx):
         if self._strings is None:
             self._strings = {}
-            self._init_string_offsets()
 
-        if str_idx not in self._strings:
-            string_off = self._string_offsets[str_idx]
-            utf16_size, c = read_uleb128_fast(self.buf, string_off)
-            data_start = string_off + c
-            
-            # Read until null byte
-            end = data_start
-            while self.buf[end] != 0:
-                end += 1
-            
-            s = bytes(self.buf[data_start:end]).decode('utf-8', errors='replace')
-            self._strings[str_idx] = s
-            
-        return self._strings[str_idx]
+        if str_idx in self._strings:
+            return self._strings[str_idx]
 
-    def _init_string_offsets(self):
-        if not hasattr(self, '_string_offsets') or self._string_offsets is None:
-            off = self.header.strings[0]
-            size = self.header.strings[1]
-            if size > 0:
-                self._string_offsets = struct.unpack_from(f'<{size}I', self.buf, off)
-            else:
-                self._string_offsets = ()
+        str_idx_off = self.header.strings[0]
+        str_size = self.header.strings[1]
+        string_off = _STRUCT_I.unpack_from(self.buf, str_idx_off + str_idx * 4)[0]
+        utf16_size, c = read_uleb128_fast(self.buf, string_off)
+        data_start = string_off + c
+        end = data_start + utf16_size
+        s = bytes(self.buf[data_start:end]).decode('utf-8', errors='replace')
+        self._strings[str_idx] = s
+        return s
+
+#    def _init_string_offsets(self):
+#        if not hasattr(self, '_string_offsets') or self._string_offsets is None:
+#            off = self.header.strings[0]
+#            size = self.header.strings[1]
+#            if size > 0:
+#                self._string_offsets = struct.unpack_from(f'<{size}I', self.buf, off)
+#            else:
+#                self._string_offsets = ()
 
     @property
     def strings(self):
@@ -432,25 +430,20 @@ class DEX:
         size = self.header.classes[1]
         type_ids_off = self.header.types[0]
         
-        # 1. Fast find target string idx by scanning bytes directly
         target_str_idx = -1
+        str_off = self.header.strings[0]
         str_size = self.header.strings[1]
         
         if str_size > 0:
-            self._init_string_offsets()
+            # self._init_string_offsets()
             encoded_fullname = fullname.encode('utf-8')
             encoded_fullname_with_null = self._get_uleb128_prefix(len(encoded_fullname)) + encoded_fullname + b'\x00'
             
-            # Use Python's built-in fast bytes search
             raw_bytes = self.buf.obj if isinstance(self.buf, memoryview) else self.buf
-            offsets = self._string_offsets
-
-            # Since Dalvik uses MUTF-8 and string format is ULEB128 len + MUTF-8 + \x00
-            # We can search for the raw bytes
-            # Note: The search might match data outside the string pool. So we loop until we find a valid one.
-            idx = offsets[0]
-            idx = raw_bytes.find(encoded_fullname_with_null, idx)
-            target_str_idx = bisect.bisect_left(offsets, idx)
+            strdata_off = _STRUCT_I.unpack_from(raw_bytes, str_off)[0]
+            idx = raw_bytes.find(encoded_fullname_with_null, strdata_off)
+            idx = idx.to_bytes(4, 'little')
+            target_str_idx = (raw_bytes.find(idx, str_off) - str_off) // 4
 
         if target_str_idx == -1:
             return None
