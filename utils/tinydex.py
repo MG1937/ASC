@@ -303,7 +303,7 @@ class DEX:
         self._types = None
         self._methods = None
         self._fields = None
-        self._classes = None
+        self._classes = {}
 
         self._strings_proxy = self.StringsProxy(self)
         self._types_proxy = self.TypesProxy(self)
@@ -419,9 +419,13 @@ class DEX:
             self.size = dex.header.classes[1]
             self.off = dex.header.classes[0]
         def __getitem__(self, idx):
+            if idx in self.dex._classes:
+                return self.dex._classes[idx]
             class_def_off = self.off + idx * 32
             class_idx = _STRUCT_I.unpack_from(self.dex.buf, class_def_off)[0]
-            return DexClass(self.dex, class_idx, class_def_off, idx)
+            class_obj = DexClass(self.dex, class_idx, class_def_off, idx)
+            self.dex._classes[idx] = class_obj
+            return class_obj
         def __len__(self):
             return self.size
 
