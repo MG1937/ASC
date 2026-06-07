@@ -305,6 +305,12 @@ class DEX:
         self._fields = None
         self._classes = None
 
+        self._strings_proxy = self.StringsProxy(self)
+        self._types_proxy = self.TypesProxy(self)
+        self._methods_proxy = self.MethodsProxy(self)
+        self._fields_proxy = self.FieldsProxy(self)
+        self._classes_proxy = self.ClassesProxy(self)
+
     # lazy parse
     def get_string(self, str_idx):
         if self._strings is None:
@@ -332,16 +338,17 @@ class DEX:
 #            else:
 #                self._string_offsets = ()
 
+    class StringsProxy:
+        def __init__(self, dex):
+            self.dex = dex
+        def __getitem__(self, idx):
+            return self.dex.get_string(idx)
+        def __len__(self):
+            return self.dex.header.strings[1]
+
     @property
     def strings(self):
-        class StringsProxy:
-            def __init__(self, dex):
-                self.dex = dex
-            def __getitem__(self, idx):
-                return self.dex.get_string(idx)
-            def __len__(self):
-                return self.dex.header.strings[1]
-        return StringsProxy(self)
+        return self._strings_proxy
 
     def get_type(self, type_idx):
         if self._types is None:
@@ -355,16 +362,17 @@ class DEX:
             
         return self._types[type_idx]
 
+    class TypesProxy:
+        def __init__(self, dex):
+            self.dex = dex
+        def __getitem__(self, idx):
+            return self.dex.get_type(idx)
+        def __len__(self):
+            return self.dex.header.types[1]
+
     @property
     def types(self):
-        class TypesProxy:
-            def __init__(self, dex):
-                self.dex = dex
-            def __getitem__(self, idx):
-                return self.dex.get_type(idx)
-            def __len__(self):
-                return self.dex.header.types[1]
-        return TypesProxy(self)
+        return self._types_proxy
 
     def get_method(self, method_idx):
         if self._methods is None:
@@ -391,7 +399,7 @@ class DEX:
 
     @property
     def methods(self):
-        return self.MethodsProxy(self)
+        return self._methods_proxy
 
     class FieldsProxy:
         def __init__(self, dex):
@@ -403,7 +411,7 @@ class DEX:
 
     @property
     def fields(self):
-        return self.FieldsProxy(self)
+        return self._fields_proxy
 
     class ClassesProxy:
         def __init__(self, dex):
@@ -419,7 +427,7 @@ class DEX:
 
     @property
     def classes(self):
-        return self.ClassesProxy(self)
+        return self._classes_proxy
 
     """
     # still not lazy
