@@ -380,29 +380,49 @@ class DEX:
             self._fields[field_idx] = DexField(self, field_idx)
         return self._fields[field_idx]
 
+        # We simulate the list access if someone does dex.methods[idx]
+    class MethodsProxy:
+        def __init__(self, dex):
+            self.dex = dex
+        def __getitem__(self, idx):
+            return self.dex.get_method(idx)
+        def __len__(self):
+            return self.dex.header.methods[1]
+
     @property
     def methods(self):
-        # We simulate the list access if someone does dex.methods[idx]
-        class MethodsProxy:
-            def __init__(self, dex):
-                self.dex = dex
-            def __getitem__(self, idx):
-                return self.dex.get_method(idx)
-            def __len__(self):
-                return self.dex.header.methods[1]
-        return MethodsProxy(self)
+        return self.MethodsProxy(self)
+
+    class FieldsProxy:
+        def __init__(self, dex):
+            self.dex = dex
+        def __getitem__(self, idx):
+            return self.dex.get_field(idx)
+        def __len__(self):
+            return self.dex.header.fields[1]
 
     @property
     def fields(self):
-        class FieldsProxy:
-            def __init__(self, dex):
-                self.dex = dex
-            def __getitem__(self, idx):
-                return self.dex.get_field(idx)
-            def __len__(self):
-                return self.dex.header.fields[1]
-        return FieldsProxy(self)
+        return self.FieldsProxy(self)
 
+    class ClassesProxy:
+        def __init__(self, dex):
+            self.dex = dex
+            self.size = dex.header.classes[1]
+            self.off = dex.header.classes[0]
+        def __getitem__(self, idx):
+            class_def_off = self.off + idx * 32
+            class_idx = _STRUCT_I.unpack_from(self.dex.buf, class_def_off)[0]
+            return DexClass(self.dex, class_idx, class_def_off, idx)
+        def __len__(self):
+            return self.size
+
+    @property
+    def classes(self):
+        return self.ClassesProxy(self)
+
+    """
+    # still not lazy
     @property
     def classes(self):
         if self._classes is None:
@@ -415,6 +435,7 @@ class DEX:
                 class_idx = _STRUCT_I.unpack_from(self.buf, class_def_off)[0]
                 self._classes.append(DexClass(self, class_idx, class_def_off, i))
         return self._classes
+    """
 
     # only return uleb128 prefix byte, only fit class string
     # we dont care other situation!!!!
@@ -457,7 +478,11 @@ class DEX:
         class_idx = (raw_bytes.find(type_idx, off) - off) // 0x20
         if class_idx == -1:
             return None
+        return self.classes[class_idx]
+        """
         if self._classes is None:
             self.classes
         return self._classes[class_idx]
+        """
+
 
