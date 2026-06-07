@@ -426,34 +426,33 @@ class DEX:
             return bytes([lens | 0x80, lens >> 7])
 
     def get_class(self, fullname):
+        raw_bytes = self.buf.obj if isinstance(self.buf, memoryview) else self.buf
+
         off = self.header.classes[0]
         size = self.header.classes[1]
         type_ids_off = self.header.types[0]
-        
-        target_str_idx = -1
-        str_off = self.header.strings[0]
-        str_size = self.header.strings[1]
-        
-        if str_size > 0:
-            # self._init_string_offsets()
-            encoded_fullname = fullname.encode('utf-8')
-            encoded_fullname_with_null = self._get_uleb128_prefix(len(encoded_fullname)) + encoded_fullname + b'\x00'
-            
-            raw_bytes = self.buf.obj if isinstance(self.buf, memoryview) else self.buf
-            strdata_off = _STRUCT_I.unpack_from(raw_bytes, str_off)[0]
-            idx = raw_bytes.find(encoded_fullname_with_null, strdata_off)
-            idx = idx.to_bytes(4, 'little')
-            target_str_idx = (raw_bytes.find(idx, str_off) - str_off) // 4
+        type_ids_size = self.header.types[1]
+        type_idx = -1
 
-        if target_str_idx == -1:
+        left, right = 0, type_ids_size - 1
+        while left <= right:
+            mid = (left + right) // 2
+            desc_idx = _STRUCT_I.unpack_from(raw_bytes, type_ids_off + mid * 0x4)[0]
+            string = self.get_string(desc_idx)
+            if string == fullname:
+                type_idx = mid
+                break
+            elif string < fullname:
+                left = mid + 1
+            else:
+                right = mid - 1
+        
+        if type_idx == -1:
             return None
-
-        # descriptor_idx -> type_id_item -> class_def_item
-        desc_idx = target_str_idx.to_bytes(4, 'little')
 
         # I DONT GIVE SHIT ABOUT DATA MISALIGNMENT!!!
         # IF I CAN FIND STRING IDX, I MUST CAN FIND TYPE IDX!!!!
-        type_idx = (raw_bytes.find(desc_idx, type_ids_off) - type_ids_off) // 4 # type_id_item len == uint
+        # type_idx = (raw_bytes.find(desc_idx, type_ids_off) - type_ids_off) // 4 # type_id_item len == uint
         type_idx = type_idx.to_bytes(4, 'little')
         class_idx = (raw_bytes.find(type_idx, off) - off) // 0x20
         if class_idx == -1:

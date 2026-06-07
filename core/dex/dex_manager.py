@@ -8,6 +8,8 @@ from core.dex.dex_remapper import DexIndexMapper
 from core.dex.dex_constructor import DexHollower
 from core.dex.dex_builder import DexBuilder
 
+# this part gen by LLM, I already build the infra, let LLM arrange this
+
 class DexManager:
     def __init__(self, dex_path: str, debug: bool = False):
         self.dex_path = dex_path

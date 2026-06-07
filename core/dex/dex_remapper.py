@@ -78,6 +78,7 @@ class DexIndexMapper:
         self.hollower = hollower
 
     def _fill_data_types(self):
+        # fill data types may not necessary, but all dex need these base types... hh
         self.stridx_data_types = {}
         self.typeidx_data_types = {}
         
@@ -201,7 +202,7 @@ class DexIndexMapper:
 
         self._fill_data_types()
 
-        # === FIELD IDX (from bytecode) ===
+        # === FIELD IDX ===
         for i in range(len(self.mapper["FIELD"])):
             if i in self.mapper["FIELD"]:
                 origin_field_idx = self.mapper["FIELD"][i]
@@ -217,7 +218,7 @@ class DexIndexMapper:
                 new_field = [fld_clz_typeidx, fld_type_typeidx, fld_name_stridx]
                 self._add_field_restruct(new_field, field_obj.index)
 
-        # === METHOD IDX (from bytecode) ===
+        # === METHOD IDX ===
         for i in range(len(self.mapper["METHOD"])):
             if i in self.mapper["METHOD"]:
                 origin_method_idx = self.mapper["METHOD"][i]

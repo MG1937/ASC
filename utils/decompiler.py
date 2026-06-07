@@ -8,6 +8,9 @@ class DummyModule:
     def __iter__(self): return iter([])
     def __call__(self, *args, **kwargs): return DummyModule()
     
+
+# The dummy import trick bascially gen by LLM 20260607
+
 sys.modules['androguard.core.apk'] = DummyModule()
 sys.modules['networkx'] = DummyModule()
 sys.modules['pygments'] = DummyModule()
@@ -41,7 +44,6 @@ sys.modules['multiprocessing.context'] = DummyModule()
 sys.modules['multiprocessing.reduction'] = DummyModule()
 sys.modules['xml.sax.saxutils'] = DummyModule()
 
-# 根据 importtime 进一步干掉 Python 基础库中被 Androguard 错误引入的重型垃圾
 sys.modules['tempfile'] = DummyModule()
 sys.modules['bz2'] = DummyModule()
 sys.modules['lzma'] = DummyModule()
@@ -58,15 +60,13 @@ sys.modules['weakref'] = DummyModule()
 from androguard.core.dex import DEX
 import androguard.core.dex as androguard_dex
 
-# 彻底干掉 Androguard 的 Adler32 校验，避免在 dex_builder.py 里浪费 CPU 算校验和
 original_header_init = androguard_dex.HeaderItem.__init__
 def monkey_header_init(self, offset, buff, cm):
-    # 暂时捕获 ValueError，因为原版代码遇到校验错误会抛异常
     try:
         original_header_init(self, offset, buff, cm)
     except ValueError as e:
         if "Adler32" in str(e):
-            pass # 忽略 Adler32 错误
+            pass
         else:
             raise e
 androguard_dex.HeaderItem.__init__ = monkey_header_init

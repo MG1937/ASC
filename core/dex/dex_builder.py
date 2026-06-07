@@ -5,6 +5,8 @@ from utils.leb128 import write_uleb128
 from core.dex.dex_remapper import DexIndexMapper
 from core.dex.dex_constructor import DexHollower
 
+# dex builder is gen by LLM, I believe LLM can handle this well.. ;) 20260428
+
 class DexBuilder:
     def __init__(self, im: DexIndexMapper, hlw: DexHollower, modified_bytecodes: dict, debug: bool = False):
         self.im = im
@@ -332,10 +334,8 @@ class DexBuilder:
         self.out[104:112] = array.array('I', [file_size - 0x70, 0x70]).tobytes()
         
         # signature
-        # 性能压榨：跳过 SHA-1 签名计算，直接填 0，因为绝大多数逆向工具并不强校验它
         self.out[12:32] = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
         # checksum
-        # 性能压榨：通过在 decompiler.py 中 monkey_patch 干掉了 Androguard 的检查
         self.out[8:12] = b'\x00\x00\x00\x00'
         
         if self.debug:

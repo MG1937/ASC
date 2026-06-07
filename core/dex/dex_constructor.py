@@ -68,19 +68,19 @@ class DexHollower:
         self.ifs_list_hlw_types.extend(arr)
         return ifs_size
 
-    # This method gen By LLM, too complex, I dont want to write it
+    # This method partically gen By LLM, too complex, I dont want to write it
     def _hollow_class_data_item_bytes(self, off : int):
         if off == 0: return 0
         data = self._raw_cache
         p = off
         
-        # 1. Header
+        # Header
         s_f_cnt, c = read_uleb128_fast(data, p); p += c
         i_f_cnt, c = read_uleb128_fast(data, p); p += c
         d_m_cnt, c = read_uleb128_fast(data, p); p += c
         v_m_cnt, c = read_uleb128_fast(data, p); p += c
 
-        # 2. Static Fields
+        # Static Fields
         last_idx = 0
         for _ in range(s_f_cnt):
             diff, c = read_uleb128_fast(data, p)
@@ -89,7 +89,7 @@ class DexHollower:
             p += c
             p += read_uleb128_len(data, p)
 
-        # 3. Instance Fields
+        # Instance Fields
         last_idx = 0
         for _ in range(i_f_cnt):
             diff, c = read_uleb128_fast(data, p)
@@ -98,7 +98,7 @@ class DexHollower:
             p += c
             p += read_uleb128_len(data, p)
 
-        # 4. Direct Methods
+        # Direct Methods
         last_idx = 0
         for _ in range(d_m_cnt):
             diff, c = read_uleb128_fast(data, p)
@@ -113,13 +113,16 @@ class DexHollower:
             
             if val > 0:
                 # Let's align code_off to 4 bytes because Dalvik requires code_item to be 4-byte aligned
+                # 20260429 LLM add it, I am not familiar with alignment details...
+                # 20260607 leave the code here, document requires 4 bytes alignment
+                # https://source.android.com/docs/core/runtime/dex-format?hl=zh-cn#type-id-item
                 aligned_val = (val + 3) & ~3
                 code_item_head = data[aligned_val : aligned_val + 16]
                 debug_val = int.from_bytes(code_item_head[8:12], 'little')
                 self.code_item_hlws.append((code_item_head, 8, debug_val, last_idx))
             p += c
 
-        # 5. Virtual Methods
+        # Virtual Methods
         last_idx = 0
         for _ in range(v_m_cnt):
             diff, c = read_uleb128_fast(data, p)

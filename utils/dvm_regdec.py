@@ -1,8 +1,7 @@
 import struct
 from models.dvm_opcode import Format
 
-# Gen by LLM, it should works fine...
-# follow https://cs.android.com/android/platform/superproject/+/android-latest-release:art/libdexfile/dex/dex_instruction-inl.h
+# https://cs.android.com/android/platform/superproject/+/android-latest-release:art/libdexfile/dex/dex_instruction-inl.h
 
 _STRUCT_H = struct.Struct("<H")
 _STRUCT_h_SIGNED = struct.Struct("<h")
@@ -27,9 +26,6 @@ def set_index(bytecode_flow, pc, new_idx, dvm_op):
     else:
         bytecode_flow[start] = new_idx & 0xFF
         bytecode_flow[start + 1] = (new_idx >> 8) & 0xFF
-
-# bytecode bit operate is too complex, so I make LLM generate all following code
-# MAGIC, I DONT KNOW WHY THESE WORKS
 
 def fetch16(bytecode_flow, pc, word_offset):
     start = pc + word_offset * 2
