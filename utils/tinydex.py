@@ -11,6 +11,7 @@ _STRUCT_HHHHII = struct.Struct('<HHHHII')
 
 class DEXHeader:
     def __init__(self, buf):
+        # (off, size)
         # 0x3c offset == ids_off, 0x38 offset == ids_size
         self.strings = (_STRUCT_I.unpack_from(buf, 0x3C)[0], _STRUCT_I.unpack_from(buf, 0x38)[0])
         # 0x44 offset == ids_off, 0x40 offset == ids_size
