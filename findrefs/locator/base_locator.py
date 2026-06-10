@@ -7,6 +7,7 @@ class BaseLocator:
         self.dex = dex
         self.buf = dex.buf
         self.header = dex.header
+        self.mapoff = dex.header.mapoff
 
     def locate(self, offset):
         return None

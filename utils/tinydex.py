@@ -20,6 +20,7 @@ class DEXHeader:
         self.fields = (_STRUCT_I.unpack_from(buf, 0x54)[0], _STRUCT_I.unpack_from(buf, 0x50)[0])
         self.methods = (_STRUCT_I.unpack_from(buf, 0x5C)[0], _STRUCT_I.unpack_from(buf, 0x58)[0])
         self.classes = (_STRUCT_I.unpack_from(buf, 0x64)[0], _STRUCT_I.unpack_from(buf, 0x60)[0])
+        self.mapoff = _STRUCT_I.unpack_from(buf, 0x34)[0]
 
 class PrimitiveTypes:
     VOID_T = 0
