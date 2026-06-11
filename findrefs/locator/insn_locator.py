@@ -10,6 +10,7 @@ _STRUCT_H = struct.Struct('<H')
 class InsnLocator(BaseLocator):
     def __init__(self, dex):
         super().__init__(dex)
+        self.parsed = False
         self.insn_offs = [] # for sort
         self.method_map = defaultdict(list) # {insn_off : [midx, midx2...]}
         self.insn_off_size = {} # {insn_off : insn_size}
@@ -66,7 +67,7 @@ class InsnLocator(BaseLocator):
             mtype = _STRUCT_H.unpack_from(self.buf, mapoff)[0]
             if mtype == 0x2000:
                 break
-            mapoff += 0xc            
+            mapoff += 0xc
         if mtype != 0x2000:
             self._build_map_bydef()
             return None
@@ -86,7 +87,14 @@ class InsnLocator(BaseLocator):
             if class_data_off == 0:
                 continue
             self._class_data_parse(data, class_data_off)
-            
+    
+    def parse(self):
+        self._build_map_bymap()
+        self.insn_offs.sort()
+        self.parsed = True
+
     # insn offset to classdef + methodidx
-    def locate(self, offset):
-       pass 
+    def locate(self, offset : list):
+        if not self.parsed:
+            # parse timing controlled by manager
+            return None
