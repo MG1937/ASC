@@ -68,7 +68,7 @@ class InsnLocator(BaseLocator):
                 break
             mapoff += 0xc            
         if mtype != 0x2000:
-            # fallback to class def parsing
+            self._build_map_bydef()
             return None
 
         # skip type + unused
@@ -77,6 +77,16 @@ class InsnLocator(BaseLocator):
         for _ in range(class_data_size):
             class_data_off = self._class_data_parse(data, class_data_off)
 
+    def _build_map_bydef(self):
+        class_def_off, class_def_size = self.header.classes
+        data = bytes(self.buf)
+        for i in range(class_def_size):
+            class_data_off = _STRUCT_I.unpack_from(self.buf, class_def_off + 24)[0]
+            class_def_off += 0x20
+            if class_data_off == 0:
+                continue
+            self._class_data_parse(data, class_data_off)
+            
     # insn offset to classdef + methodidx
     def locate(self, offset):
        pass 
