@@ -11,9 +11,11 @@ class InsnLocator(BaseLocator):
     def __init__(self, dex):
         super().__init__(dex)
         self.parsed = False
-        self.insn_offs = [] # for sort
-        self.method_map = defaultdict(list) # {insn_off : [midx, midx2...]}
-        self.insn_off_size = {} # {insn_off : insn_size}
+        # use 16 bytes dense table to achieve O(1) speed
+        self.insn_maps = {} # {insn_off_bucket: midx, insn_off_bucket : [midx, midx2...]}
+        # self.insn_offs = [] # for sort
+        # self.method_map = defaultdict(list) # {insn_off : [midx, midx2...]}
+        # self.insn_off_size = {} # {insn_off : insn_size}
 
     def _encoded_method_parse(self, data : bytes, pos, midx):
         if pos == 0:
@@ -21,9 +23,24 @@ class InsnLocator(BaseLocator):
             return
         insn_size = _STRUCT_I.unpack_from(data, pos + 12)[0]
         insn_off = pos + 16
-        self.insn_offs.append(insn_off)
-        self.insn_off_size[insn_off] = insn_size
-        self.method_map[insn_off].append(midx)
+        insn_maps = self.insn_maps
+        # need to declare why do this...
+        insn_bucket_start = insn_off >> 4
+        insn_bucket_end = (insn_off + insn_size * 2 - 1) >> 4
+
+        old = insn_maps.get(insn_bucket_start)
+        if old:
+            if isinstance(old, int):
+                midx = [midx, old]
+            else:
+                # list
+                midx = old + [midx]
+
+        for i in range(insn_bucket_start, insn_bucket_end + 1):
+            insn_maps[i] = midx
+        # self.insn_offs.append(insn_off)
+        # self.insn_off_size[insn_off] = insn_size
+        # self.method_map[insn_off].append(midx)
 
     # return next class data item pos
     def _class_data_parse(self, data : bytes, pos):
@@ -90,7 +107,6 @@ class InsnLocator(BaseLocator):
     
     def parse(self):
         self._build_map_bymap()
-        self.insn_offs.sort()
         self.parsed = True
 
     # insn offset to classdef + methodidx

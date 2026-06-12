@@ -12,4 +12,3 @@ insn_locator = InsnLocator(dex)
 insn_locator.parse()
 t_end = time.perf_counter()
 print(f"[DEBUG] insn_locator Time: {(t_end - t_start)*1000000:.2f} us")
-
