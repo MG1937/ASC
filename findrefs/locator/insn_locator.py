@@ -92,10 +92,11 @@ class InsnLocator(BaseLocator):
     def _build_map_bymap(self):
         # dont reuse tinydex, frequent lazy parser may cause bad performance
         # parse all items in one shot by map!
-        mapsize = _STRUCT_I.unpack_from(self.buf, self.mapoff)[0]
+        buf = self.buf
+        mapsize = _STRUCT_I.unpack_from(buf, self.mapoff)[0]
         mapoff = self.mapoff + 4
         for i in range(mapsize):
-            mtype = _STRUCT_H.unpack_from(self.buf, mapoff)[0]
+            mtype = _STRUCT_H.unpack_from(buf, mapoff)[0]
             if mtype == 0x2000:
                 break
             mapoff += 0xc
@@ -104,16 +105,16 @@ class InsnLocator(BaseLocator):
             return None
 
         # skip type + unused
-        class_data_size, class_data_off = struct.unpack_from("<II", self.buf, mapoff + 4)
-        data = bytes(self.buf) # for performance
+        class_data_size, class_data_off = struct.unpack_from("<II", buf, mapoff + 4)
+        data = bytes(buf) # for performance
         for _ in range(class_data_size):
             class_data_off = self._class_data_parse(data, class_data_off)
 
     def _build_map_bydef(self):
         class_def_off, class_def_size = self.header.classes
-        data = bytes(self.buf)
+        data = bytes(buf)
         for i in range(class_def_size):
-            class_data_off = _STRUCT_I.unpack_from(self.buf, class_def_off + 24)[0]
+            class_data_off = _STRUCT_I.unpack_from(buf, class_def_off + 24)[0]
             class_def_off += 0x20
             if class_data_off == 0:
                 continue
