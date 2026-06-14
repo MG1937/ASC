@@ -7,6 +7,20 @@ import struct
 _STRUCT_I = struct.Struct('<I')
 _STRUCT_H = struct.Struct('<H')
 
+# +-----------------+
+# | codeitem header | <-- register_size, ins_size... MUST hold 16 bytes!
+# +-----------------+
+# |  insn (ushort)  | <-- at least 1 insn for 2 bytes!
+# +-----------------+
+# | codeitem header |
+# |       ...       |
+# Each method's insn starts at codeitem offset + 16 (header size)
+# Use insn_off >> 4 as bucket key
+# methods are naturally bucketed.
+# For methods spanning multiple buckets,
+# fill all buckets from start to end. Achieves O(1) lookup.
+
+# cover insn offset to method idx
 class InsnLocator(BaseLocator):
     def __init__(self, dex):
         super().__init__(dex)
@@ -110,7 +124,13 @@ class InsnLocator(BaseLocator):
         self.parsed = True
 
     # insn offset to classdef + methodidx
-    def locate(self, offset : list):
+    def locate(self, offsets : list):
         if not self.parsed:
             # parse timing controlled by manager
             return None
+        ret_table = []
+        insn_maps = self.insn_maps
+        for off in offsets:
+            ret_table.append(insn_maps.get(off))
+        return ret_table
+            
