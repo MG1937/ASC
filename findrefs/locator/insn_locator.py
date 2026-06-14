@@ -131,6 +131,6 @@ class InsnLocator(BaseLocator):
         ret_table = []
         insn_maps = self.insn_maps
         for off in offsets:
-            ret_table.append(insn_maps.get(off))
+            ret_table.append(insn_maps.get(off >> 4))
         return ret_table
             
