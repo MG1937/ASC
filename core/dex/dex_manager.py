@@ -1,5 +1,6 @@
 import os
 import time
+import mmap
 
 from utils.tinydex import DEX
 from core.dvm_interpreter import DvmInterpreter
@@ -22,11 +23,14 @@ class DexManager:
     def _load_dex(self):
         t_start = time.perf_counter()
         
-        size = os.path.getsize(self.dex_path)
-        self.dexraw = bytearray(size)
-        with open(self.dex_path, "rb") as f:
-            f.readinto(self.dexraw)
-            
+        # size = os.path.getsize(self.dex_path)
+        # self.dexraw = bytearray(size)
+        # with open(self.dex_path, "rb") as f:
+        #     f.readinto(self.dexraw)
+        f = open(self.dex_path, "rb")
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        self.dexraw = mm
+
         self.dex = DEX.parse(self.dexraw, os.path.basename(self.dex_path))
         
         if self.debug:

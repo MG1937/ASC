@@ -6,7 +6,7 @@ from utils.tinydex import DexClass as Class
 
 class DexOperator:
     # due to lief bugs... need to operate raw bytes in DEX ;(
-    def __init__(self, dex : DEX, dex_buffer : bytearray):
+    def __init__(self, dex : DEX, dex_buffer):
         # preheat for offset operate 
         self.dex = dex
         self._raw_cache = dex_buffer
@@ -38,7 +38,7 @@ class DexOperator:
         return int.from_bytes(self._raw_cache[offset:offset+2], 'little')
 
 class DexIndexMapper:
-    def __init__(self, mapper, dex : DEX, dex_buffer : bytearray):
+    def __init__(self, mapper, dex : DEX, dex_buffer):
         # indexhandler mapper
         self.mapper = mapper
         self.dex = dex

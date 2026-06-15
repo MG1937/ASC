@@ -11,7 +11,7 @@ class DexHollower:
     # Extract All bytes of specfic item 
     # Hollow out all necessray fields, reconstruct it
 
-    def __init__(self, dex : DEX, dex_buffer : bytearray, clz_str : str, debug: bool = False):
+    def __init__(self, dex : DEX, dex_buffer , clz_str : str, debug: bool = False):
         self.debug = debug
         if self.debug:
             import time
