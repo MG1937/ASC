@@ -9,5 +9,5 @@ class BaseLocator:
         self.header = dex.header
         self.mapoff = dex.header.mapoff
 
-    def locate(self, offsets):
+    def locate(self, obj):
         return None

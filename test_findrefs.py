@@ -1,4 +1,6 @@
 from findrefs.locator.insn_locator import InsnLocator
+from findrefs.locator.string_locator import StringLocator
+
 from utils.tinydex import DEX 
 import mmap
 
@@ -12,4 +14,10 @@ insn_locator = InsnLocator(dex)
 insn_locator.parse()
 t_end = time.perf_counter()
 print(f"[DEBUG] insn_locator Time: {(t_end - t_start)*1000000:.2f} us")
-print(insn_locator.locate([0x6731be,0x5c76bc,0x56ecb4]))
+
+t_start = time.perf_counter()
+locator = StringLocator(dex)
+offsets = locator.locate("view")
+t_end = time.perf_counter()
+print(f"[DEBUG] string_locator Time: {(t_end - t_start)*1000000:.2f} us")
+
