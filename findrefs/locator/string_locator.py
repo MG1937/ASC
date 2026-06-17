@@ -46,12 +46,13 @@ class StringLocator(BaseLocator):
             # offsets.append(offset + 1) # skip over 00 byte
         # return offsets
 
-    def locate(self, string : str):
+    def locate(self, string : str) -> set:
         if not self.parsed:
             self._build_map()
         stridx_map = self.stridx_map
-        located_idx = []
+        located_idx = set()
         for offset in self._match_string_offset(string):
-            located_idx.append(stridx_map[offset] - 1)
+            located_idx.add(stridx_map[offset] - 1)
+        # return set for O(1) lookup
         return located_idx
         

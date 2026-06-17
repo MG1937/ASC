@@ -10,7 +10,7 @@ _STRUCT_H = struct.Struct('<H')
 # +-----------------+
 # | codeitem header | <-- register_size, ins_size... MUST hold 16 bytes!
 # +-----------------+
-# |  insn (ushort)  | <-- at least 1 insn for 2 bytes!
+# |  insn (ushort)  | <-- at least 1 insn, which hold 2 bytes!
 # +-----------------+
 # | codeitem header |
 # |       ...       |
@@ -27,6 +27,8 @@ class InsnLocator(BaseLocator):
         self.parsed = False
         # use 16 bytes dense table to achieve O(1) speed
         self.insn_maps = {} # {insn_off_bucket: midx, insn_off_bucket : [midx, midx2...]}
+        self.code_item_start = 0 # fuzzy offset around 16 bytes
+        self.code_item_end = 0 # fuzzy too
         # self.insn_offs = [] # for sort
         # self.method_map = defaultdict(list) # {insn_off : [midx, midx2...]}
         # self.insn_off_size = {} # {insn_off : insn_size}
@@ -121,11 +123,16 @@ class InsnLocator(BaseLocator):
             self._class_data_parse(data, class_data_off)
     
     def parse(self):
+        if self.parsed:
+            return
         self._build_map_bymap()
+        tmp_list = self.insn_maps.keys()
+        self.code_item_start = min(tmp_list) << 4
+        self.code_item_end = (max(tmp_list) + 1) << 4
         self.parsed = True
 
     # insn offset to classdef + methodidx
-    def locate(self, offsets : list):
+    def locate(self, offsets : list) -> list:
         if not self.parsed:
             # parse timing controlled by manager
             return None
@@ -133,5 +140,7 @@ class InsnLocator(BaseLocator):
         insn_maps = self.insn_maps
         for off in offsets:
             ret_table.append(insn_maps.get(off >> 4))
+            # dense table is fuzzy, insn range verify back to method verify stage! 20260617
+        # return list instead of set, in order to map the fuzzy offset to the correspond matched offset
         return ret_table
             

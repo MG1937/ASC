@@ -1,5 +1,6 @@
 from findrefs.locator.insn_locator import InsnLocator
 from findrefs.locator.string_locator import StringLocator
+from findrefs.scan.code_item_scan import CodeItemScanner
 
 from utils.tinydex import DEX 
 import mmap
@@ -21,3 +22,10 @@ offsets = locator.locate("view")
 t_end = time.perf_counter()
 print(f"[DEBUG] string_locator Time: {(t_end - t_start)*1000000:.2f} us")
 
+t_start = time.perf_counter()
+codescanner = CodeItemScanner(insn_locator)
+scan = {"string": offsets}
+codescanner.scan(scan)
+t_end = time.perf_counter()
+print(f"[DEBUG] code_scan Time: {(t_end - t_start)*1000000:.2f} us")
+print(scan)
