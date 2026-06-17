@@ -146,7 +146,10 @@ class InsnLocator(BaseLocator):
             midx = insn_maps.get(off >> 4)
             if not midx: # bugfix: avoid None value
                 continue
-            ret_table.add(midx)
+            if isinstance(midx, list): # avoid insn bucket conflict
+                ret_table.update(midx)
+            else:
+                ret_table.add(midx)
             # dense table is fuzzy, insn range verify back to method verify stage! 20260617
         return ret_table
             

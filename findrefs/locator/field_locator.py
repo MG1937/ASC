@@ -6,16 +6,17 @@ import struct
 _STRUCT_HHI = struct.Struct('<HHI')
 _STRUCT_I = struct.Struct('<I')
 
-class MethodLocator(BaseLocator):
+class FieldLocator(BaseLocator):
     def __init__(self, dex):
         super().__init__(dex)
         self.str_locator = None
+        self.type_locator = None
         self.parsed = False
-        self.clz_maps = defaultdict(set) # {type_idx : {method_idx, ...}}
-        self.method_maps = defaultdict(set) # {name_idx : {method_idx, ...}}
+        self.clz_maps = defaultdict(set) # {type_idx : {field_idx, ...}}
+        self.field_maps = defaultdict(set) # {name_idx : {field_idx, ...}}
 
     def set_str_locator(self, locator):
-        self.str_locator = locator
+        self.str_locator = locator    
 
     def set_type_locator(self, locator):
         self.type_locator = locator
@@ -24,16 +25,16 @@ class MethodLocator(BaseLocator):
     def _build_map(self):
         if self.parsed:
             return
-        method_ids_off, method_ids_size = self.header.methods
+        field_ids_off, field_ids_size = self.header.fields
         clz_maps = self.clz_maps
-        method_maps = self.method_maps
+        field_maps = self.field_maps
         buf = self.buf
 
-        for method_idx in range(method_ids_size):
-            class_idx, _, name_idx = _STRUCT_HHI.unpack_from(buf, method_ids_off)
-            method_ids_off += 8
-            clz_maps[class_idx].add(method_idx)
-            method_maps[name_idx].add(method_idx)
+        for field_idx in range(field_ids_size):
+            class_idx, _, name_idx = _STRUCT_HHI.unpack_from(buf, field_ids_off)
+            field_ids_off += 8
+            clz_maps[class_idx].add(field_idx)
+            field_maps[name_idx].add(field_idx)
         self.parsed = True
 
     # which is different with type locator, this func for precise clz name
@@ -57,77 +58,77 @@ class MethodLocator(BaseLocator):
                 right = mid - 1
         return -1
 
-    def _collect_clz_mids(self, type_idxs) -> set:
+    def _collect_clz_fids(self, type_idxs) -> set:
         ret = set()
         clz_maps = self.clz_maps
         for type_idx in type_idxs:
-            mids = clz_maps.get(type_idx)
-            if mids is not None:
-                ret.update(mids)
+            fids = clz_maps.get(type_idx)
+            if fids is not None:
+                ret.update(fids)
         return ret
 
-    def _match_clz_mids(self, clz_mids : set, method : str) -> set:
+    def _match_clz_fids(self, clz_fids : set, field : str) -> set:
         ret = set()
-        methods = self.dex.methods
-        for mid in clz_mids:
-            if methods[mid].name.find(method) != -1:
-                ret.add(mid)
+        fields = self.dex.fields
+        for fid in clz_fids:
+            if fields[fid].name.find(field) != -1:
+                ret.add(fid)
         return ret
 
-    # find struct: {"class" : ["None|clz", precise], "method" : "None|fuzzy_method"}
+    # find struct: {"class" : ["None|clz", precise], "field" : "None|fuzzy_field"}
     # the two values cannot both be None
     # if class not None, input clz must be precise dalvik format value or fuzzy clz
-    # if method not None, input method name can be a fuzzy value
-    # if class is None, find out all method idx that contains the fuzzy method name while dont give shit about class
-    # if class is set, find out all methods below this class which matches the method condition
+    # if field not None, input field name can be a fuzzy value
+    # if class is None, find out all field idx that contains the fuzzy field name while dont give shit about class
+    # if class is set, find out all fields below this class which matches the field condition
     def locate(self, find : dict) -> set:
         if not self.parsed:
             self._build_map()
 
         clz = find.get("class")
-        method = find.get("method")
+        field = find.get("field")
         clz_precise = True
         if clz is not None:
             clz, clz_precise = clz
             if clz == "":
                 clz = None
-        if method == "":
-            method = None
-        if clz is None and method is None:
+        if field == "":
+            field = None
+        if clz is None and field is None:
             return set()
 
         if clz is None:
-            name_idxs = self.str_locator.locate(method)
-            method_maps = self.method_maps
+            name_idxs = self.str_locator.locate(field)
+            field_maps = self.field_maps
             ret = set()
             for name_idx in name_idxs:
-                mids = method_maps.get(name_idx)
-                if mids is None:
+                fids = field_maps.get(name_idx)
+                if fids is None:
                     continue
-                ret.update(mids)
+                ret.update(fids)
             return ret
 
         if clz_precise:
             type_idx = self._find_type_idx_precisely(clz)
             if type_idx == -1:
                 return set()
-            clz_mids = self.clz_maps.get(type_idx)
-            if clz_mids is None:
+            clz_fids = self.clz_maps.get(type_idx)
+            if clz_fids is None:
                 return set()
-            clz_mids = set(clz_mids)
+            clz_fids = set(clz_fids)
         else:
-            clz_mids = self._collect_clz_mids(self.type_locator.locate(clz))
-            if not clz_mids:
+            clz_fids = self._collect_clz_fids(self.type_locator.locate(clz))
+            if not clz_fids:
                 return set()
-        if method is None:
-            return clz_mids
+        if field is None:
+            return clz_fids
         if clz_precise:
-            return self._match_clz_mids(clz_mids, method)
+            return self._match_clz_fids(clz_fids, field)
 
-        name_idxs = self.str_locator.locate(method)
+        name_idxs = self.str_locator.locate(field)
         ret = set()
         for name_idx in name_idxs:
-            mids = self.method_maps.get(name_idx)
-            if mids is not None:
-                ret.update(clz_mids & mids)
+            fids = self.field_maps.get(name_idx)
+            if fids is not None:
+                ret.update(clz_fids & fids)
         return ret
