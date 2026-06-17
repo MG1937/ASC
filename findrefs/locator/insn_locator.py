@@ -92,6 +92,8 @@ class InsnLocator(BaseLocator):
         return pos
     
     def _build_map_bymap(self):
+        if self.parsed:
+            return
         # dont reuse tinydex, frequent lazy parser may cause bad performance
         # parse all items in one shot by map!
         buf = self.buf
@@ -113,6 +115,8 @@ class InsnLocator(BaseLocator):
             class_data_off = self._class_data_parse(data, class_data_off)
 
     def _build_map_bydef(self):
+        if self.parsed:
+            return
         class_def_off, class_def_size = self.header.classes
         data = bytes(buf)
         for i in range(class_def_size):

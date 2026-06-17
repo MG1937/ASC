@@ -16,6 +16,8 @@ class StringLocator(BaseLocator):
         self.parsed = False
     
     def _build_map(self):
+        if self.parsed:
+            return
         string_ids_off, string_ids_size = self.header.strings
         stridx_map = self.stridx_map
         buf = self.buf

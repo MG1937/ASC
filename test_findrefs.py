@@ -1,6 +1,7 @@
 from findrefs.locator.insn_locator import InsnLocator
 from findrefs.locator.method_locator import MethodLocator
 from findrefs.locator.string_locator import StringLocator
+from findrefs.locator.type_locator import TypeLocator
 from findrefs.scan.code_item_scan import CodeItemScanner
 
 from utils.tinydex import DEX 
@@ -53,3 +54,23 @@ print(f"[DEBUG] method_locator Time: {(t_end - t_start)*1000000:.2f} us")
 print({"class": None, "method": "view"}, len(wild_methods), sorted(list(wild_methods))[:5])
 print({"class": sample_method.cls.fullname, "method": None}, len(class_methods), sorted(list(class_methods))[:5])
 print({"class": sample_method.cls.fullname, "method": sample_method.name}, len(precise_methods), sorted(list(precise_methods)))
+
+t_start = time.perf_counter()
+method_scan = {"method": precise_methods}
+codescanner.scan(method_scan)
+t_end = time.perf_counter()
+print(f"[DEBUG] method_ref_scan Time: {(t_end - t_start)*1000000:.2f} us")
+print(method_scan)
+
+t_start = time.perf_counter()
+type_locator = TypeLocator(dex)
+type_locator.set_str_locator(locator)
+type_idxs = type_locator.locate("View")
+t_end = time.perf_counter()
+print(f"[DEBUG] type_locator Time: {(t_end - t_start)*1000000:.2f} us")
+
+t_start = time.perf_counter()
+type_scan = {"type": type_idxs}
+codescanner.scan(type_scan)
+t_end = time.perf_counter()
+print(f"[DEBUG] type_ref_scan Time: {(t_end - t_start)*1000000:.2f} us")

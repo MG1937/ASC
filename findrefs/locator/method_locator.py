@@ -19,6 +19,8 @@ class MethodLocator(BaseLocator):
 
     # table build is very fast, dont worry about performance
     def _build_map(self):
+        if self.parsed:
+            return
         method_ids_off, method_ids_size = self.header.methods
         clz_maps = self.clz_maps
         method_maps = self.method_maps
