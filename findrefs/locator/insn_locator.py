@@ -132,15 +132,17 @@ class InsnLocator(BaseLocator):
         self.parsed = True
 
     # insn offset to classdef + methodidx
-    def locate(self, offsets : list) -> list:
+    def locate(self, offsets : list) -> set:
         if not self.parsed:
             # parse timing controlled by manager
             return None
-        ret_table = []
+        ret_table = set()
         insn_maps = self.insn_maps
         for off in offsets:
-            ret_table.append(insn_maps.get(off >> 4))
+            midx = insn_maps.get(off >> 4)
+            if not midx: # bugfix: avoid None value
+                continue
+            ret_table.add(midx)
             # dense table is fuzzy, insn range verify back to method verify stage! 20260617
-        # return list instead of set, in order to map the fuzzy offset to the correspond matched offset
         return ret_table
             

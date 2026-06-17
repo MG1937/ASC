@@ -157,10 +157,11 @@ class CodeItemScanner:
                 matched_offset.append(idx_off + off_start - 2)
             return matched_offset
 
-
     # scan struct: {"string": {idx1, idx2...}, "field": ...,}
     # only handle with string idx, field idx, method idx, type idx
     # others such as proto, methodhandle is too FUCKING wired, leave it for now.. 20260617
     def scan(self, scan : dict):
         for type_ in scan:
-            scan[type_] = self._scan_code_item(type_, scan[type_])
+            insn_offs = self._scan_code_item(type_, scan[type_])
+            mids = self.insn_locator.locate(insn_offs)
+            scan[type_] = mids
