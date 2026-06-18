@@ -130,10 +130,13 @@ class CodeItemScanner:
         self.buf = self.insn_locator.buf
         self.submem = self.buf[self.off_start: self.off_end]
 
-    def _scan_code_item(self, idx_type : str, idxs : set):
+    # if mark is True, record correspond idx for offset
+    def _scan_code_item(self, idx_type : str, idxs : set, mark):
         off_start = self.off_start
         submem = self.submem
         matched_offset = []
+        mark_idx = []
+        self.mark_idx = mark_idx
 
         if idx_type == "string":
             for match in STRINGIDX_OPS.finditer(submem):
@@ -146,6 +149,8 @@ class CodeItemScanner:
                 if idx not in idxs:
                     continue
                 matched_offset.append(idx_off + off_start - 2)
+                if mark:
+                    mark_idx.append(idx)
             return matched_offset
         else:
             for match in OPCODE_PATTERNS[idx_type].finditer(submem):
@@ -155,13 +160,15 @@ class CodeItemScanner:
                 if idx not in idxs:
                     continue
                 matched_offset.append(idx_off + off_start - 2)
+                if mark:
+                    mark_idx.append(idx)                
             return matched_offset
 
     # scan struct: {"string": {idx1, idx2...}, "field": ...,}
     # only handle with string idx, field idx, method idx, type idx
     # others such as proto, methodhandle is too FUCKING wired, leave it for now.. 20260617
-    def scan(self, scan : dict):
+    def scan(self, scan : dict, mark = False):
         for type_ in scan:
-            insn_offs = self._scan_code_item(type_, scan[type_])
+            insn_offs = self._scan_code_item(type_, scan[type_], mark)
             mids = self.insn_locator.locate(insn_offs)
             scan[type_] = mids

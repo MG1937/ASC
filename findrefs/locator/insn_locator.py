@@ -135,21 +135,24 @@ class InsnLocator(BaseLocator):
         self.code_item_end = (max(tmp_list) + 1) << 4
         self.parsed = True
 
-    # insn offset to classdef + methodidx
+    # insn offset to method idx, warn: midx can be None or list
     def locate(self, offsets : list) -> set:
         if not self.parsed:
             # parse timing controlled by manager
             return None
-        ret_table = set()
+        ret_table = []
         insn_maps = self.insn_maps
         for off in offsets:
             midx = insn_maps.get(off >> 4)
+            ret_table.append(midx)
+            """
             if not midx: # bugfix: avoid None value
                 continue
             if isinstance(midx, list): # avoid insn bucket conflict
                 ret_table.update(midx)
             else:
                 ret_table.add(midx)
+            """
             # dense table is fuzzy, insn range verify back to method verify stage! 20260617
         return ret_table
             

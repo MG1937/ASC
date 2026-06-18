@@ -38,6 +38,8 @@ print(f"[DEBUG] string_ref_count: {len(scan['string'])}")
 t_start = time.perf_counter()
 classes = []
 for mid in scan["string"]:
+    if not mid:
+        continue
     dexmethod = DexMethod(dex, mid)
     classes.append(dexmethod.cls.fullname)
 t_end = time.perf_counter()

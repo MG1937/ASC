@@ -44,53 +44,76 @@ class Type:
 
     def __init__(self, descriptor):
         self.descriptor = descriptor
-        self.dim = 0
-        self.underlying_array_type = None
-        self.value = None
-        self.type = None
-        self._parse()
+        self._dim = 0
+        self._underlying_array_type = None
+        self._value = None
+        self._type = None
+        self._parsed = False
 
     def _parse(self):
+        if self._parsed:
+            return
+        self._parsed = True
         desc = self.descriptor
         while desc.startswith('['):
-            self.dim += 1
+            self._dim += 1
             desc = desc[1:]
         
-        if self.dim > 0:
-            self.type = self.TYPES.ARRAY
-            self.underlying_array_type = Type(desc)
+        if self._dim > 0:
+            self._type = self.TYPES.ARRAY
+            self._underlying_array_type = Type(desc)
             return
 
         if desc == 'V':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.VOID_T
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.VOID_T
         elif desc == 'Z':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.BOOLEAN
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.BOOLEAN
         elif desc == 'B':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.BYTE
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.BYTE
         elif desc == 'S':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.SHORT
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.SHORT
         elif desc == 'C':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.CHAR
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.CHAR
         elif desc == 'I':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.INT
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.INT
         elif desc == 'J':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.LONG
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.LONG
         elif desc == 'F':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.FLOAT
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.FLOAT
         elif desc == 'D':
-            self.type = self.TYPES.PRIMITIVE
-            self.value = self.PRIMITIVES.DOUBLE
+            self._type = self.TYPES.PRIMITIVE
+            self._value = self.PRIMITIVES.DOUBLE
         else:
-            self.type = self.TYPES.CLASS
-            self.value = desc
+            self._type = self.TYPES.CLASS
+            self._value = desc
+
+    @property
+    def dim(self):
+        self._parse()
+        return self._dim
+
+    @property
+    def underlying_array_type(self):
+        self._parse()
+        return self._underlying_array_type
+
+    @property
+    def value(self):
+        self._parse()
+        return self._value
+
+    @property
+    def type(self):
+        self._parse()
+        return self._type
 
     def __str__(self):
         return self.descriptor
@@ -177,7 +200,7 @@ class DexMethod:
     @property
     def prototype(self):
         if not hasattr(self, '_prototype'):
-            self._prototype = DexPrototype(self.dex, self.proto_idx)
+            self._prototype = self.dex.get_prototype(self.proto_idx)
         return self._prototype
 
     @property
@@ -189,7 +212,8 @@ class DexMethod:
         if self._bytecode is not None:
             return self._bytecode
         if self._code_off == 0:
-            return []
+            self._bytecode = []
+            return self._bytecode
         
         # Parse code_item
         off = self._code_off
@@ -239,7 +263,7 @@ class DexClass:
             field_idx_diff, c = read_uleb128_fast(data, pos); pos += c
             field_idx += field_idx_diff
             access_flags, c = read_uleb128_fast(data, pos); pos += c
-            f = DexField(self.dex, field_idx)
+            f = self.dex.get_field(field_idx)
             f.access_flags = access_flags
             f.is_static = True
             self._fields.append(f)
@@ -249,7 +273,7 @@ class DexClass:
             field_idx_diff, c = read_uleb128_fast(data, pos); pos += c
             field_idx += field_idx_diff
             access_flags, c = read_uleb128_fast(data, pos); pos += c
-            f = DexField(self.dex, field_idx)
+            f = self.dex.get_field(field_idx)
             f.access_flags = access_flags
             f.is_static = False
             self._fields.append(f)
@@ -261,7 +285,7 @@ class DexClass:
             access_flags, c = read_uleb128_fast(data, pos); pos += c
             code_off, c = read_uleb128_fast(data, pos); pos += c
             
-            m = DexMethod(self.dex, method_idx)
+            m = self.dex.get_method(method_idx)
             m._code_off = code_off
             m.access_flags = access_flags
             m.is_direct = True
@@ -274,7 +298,7 @@ class DexClass:
             access_flags, c = read_uleb128_fast(data, pos); pos += c
             code_off, c = read_uleb128_fast(data, pos); pos += c
             
-            m = DexMethod(self.dex, method_idx)
+            m = self.dex.get_method(method_idx)
             m._code_off = code_off
             m.access_flags = access_flags
             m.is_direct = False
@@ -303,9 +327,11 @@ class DEX:
         
         self._strings = None
         self._types = None
+        self._prototypes = None
         self._methods = None
         self._fields = None
         self._classes = {}
+        self._classes_by_name = {}
 
         self._strings_proxy = self.StringsProxy(self)
         self._types_proxy = self.TypesProxy(self)
@@ -363,6 +389,13 @@ class DEX:
             self._types[type_idx] = Type(self.strings[str_idx])
             
         return self._types[type_idx]
+
+    def get_prototype(self, proto_idx):
+        if self._prototypes is None:
+            self._prototypes = {}
+        if proto_idx not in self._prototypes:
+            self._prototypes[proto_idx] = DexPrototype(self, proto_idx)
+        return self._prototypes[proto_idx]
 
     class TypesProxy:
         def __init__(self, dex):
@@ -461,6 +494,9 @@ class DEX:
             return bytes([lens | 0x80, lens >> 7])
 
     def get_class(self, fullname):
+        old = self._classes_by_name.get(fullname)
+        if old is not None:
+            return old
         raw_bytes = self.buf.obj if isinstance(self.buf, memoryview) else self.buf
 
         off = self.header.classes[0]
@@ -485,18 +521,16 @@ class DEX:
         if type_idx == -1:
             return None
 
-        # I DONT GIVE SHIT ABOUT DATA MISALIGNMENT!!!
-        # IF I CAN FIND STRING IDX, I MUST CAN FIND TYPE IDX!!!!
-        # type_idx = (raw_bytes.find(desc_idx, type_ids_off) - type_ids_off) // 4 # type_id_item len == uint
-        type_idx = type_idx.to_bytes(4, 'little')
-        class_idx = (raw_bytes.find(type_idx, off) - off) // 0x20
-        if class_idx == -1:
-            return None
-        return self.classes[class_idx]
+        for class_idx in range(size):
+            class_def_off = off + class_idx * 0x20
+            if _STRUCT_I.unpack_from(raw_bytes, class_def_off)[0] != type_idx:
+                continue
+            clazz = self.classes[class_idx]
+            self._classes_by_name[fullname] = clazz
+            return clazz
+        return None
         """
         if self._classes is None:
             self.classes
         return self._classes[class_idx]
         """
-
-
