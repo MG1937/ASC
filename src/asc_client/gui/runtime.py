@@ -1,0 +1,317 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from src.asc_client.apk_handler import _findrefs_worker, _inflate_dex, _parse_cd_dex_entries
+from src.asc_core.utils.tinydex import DEX
+
+
+_MAX_UI_RESULTS = 5000
+
+
+def format_class_name(name : str) -> str:
+    if not name:
+        raise ValueError("Class name cannot be empty")
+    if name.startswith("L") and name.endswith(";") and "/" in name:
+        return name
+    name = name.replace(".", "/")
+    if not name.startswith("L"):
+        name = f"L{name}"
+    if not name.endswith(";"):
+        name = f"{name};"
+    return name
+
+
+def dalvik_to_dot(name : str) -> str:
+    if name.startswith("L") and name.endswith(";"):
+        return name[1:-1].replace("/", ".")
+    return name
+
+
+def _normalize_class_query(name : str, fuzzy : bool):
+    if name is None or name == "":
+        return None
+    if fuzzy:
+        if "." in name and "/" not in name:
+            return name.replace(".", "/")
+        return name
+    return format_class_name(name)
+
+
+def build_find_query(find_type : str, value : str, class_name = None, fuzzy_class : bool = False):
+    if find_type == "string":
+        return "string", {"string": value}
+    if find_type == "type":
+        return "type", {"type": value}
+
+    class_name = _normalize_class_query(class_name, fuzzy_class)
+    if class_name is None and not value:
+        raise ValueError(f"{find_type} query needs at least one of class or {find_type} name")
+
+    if class_name is None:
+        return find_type, {find_type: {"class": None, find_type: value or None}}
+    return find_type, {find_type: {"class": [class_name, not fuzzy_class], find_type: value or None}}
+
+
+def parse_result_line(line : str):
+    dex_name, method_text, matched_text = line.split(" | ", 2)
+    class_name = method_text.split("->", 1)[0]
+    return {
+        "dex_name": dex_name,
+        "class_name": class_name,
+        "class_display": dalvik_to_dot(class_name),
+        "method_text": method_text,
+        "matched_text": matched_text,
+        "line": line,
+    }
+
+
+class GuiDexStore:
+    def __init__(self, apk_path : str, max_workers : int = 8, debug : bool = False):
+        self.apk_path = apk_path
+        self.max_workers = max_workers
+        self.debug = debug
+
+        self.entries = []
+        self.dex_buffers = {}
+        self.class_to_dex = {}
+        self.class_names = []
+        self.package_children = {}
+        self.package_classes = {}
+        self.source_cache = {}
+        self._source_lock = threading.Lock()
+
+    def _open_apk(self):
+        import mmap
+
+        fp = open(self.apk_path, "rb")
+        mm = mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ)
+        return fp, mm
+
+    def load(self, progress_callback = None):
+        fp, mm = self._open_apk()
+        try:
+            entries = _parse_cd_dex_entries(mm)
+            entries.sort(key=lambda x: x[2])
+            self.entries = entries
+            total = len(entries)
+            if total == 0:
+                self.class_names = []
+                return
+
+            def load_entry(entry):
+                data = _inflate_dex(mm, entry)
+                dex = DEX.parse(memoryview(data), entry[0])
+                classes = []
+                for class_idx in range(len(dex.classes)):
+                    classes.append(dex.classes[class_idx].fullname)
+                return entry, data, classes
+
+            done = 0
+            class_count = 0
+            with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+                futures = [ex.submit(load_entry, entry) for entry in entries]
+                for fut in as_completed(futures):
+                    entry, data, classes = fut.result()
+                    dex_name = entry[0]
+                    self.dex_buffers[dex_name] = data
+                    for class_name in classes:
+                        self.class_to_dex.setdefault(class_name, dex_name)
+                    done += 1
+                    class_count += len(classes)
+                    if progress_callback is not None:
+                        progress_callback(done, total, dex_name, class_count)
+
+            self.class_names = sorted(self.class_to_dex.keys())
+            self._build_package_index()
+        finally:
+            mm.close()
+            fp.close()
+
+    def _build_package_index(self):
+        package_children = {"": set()}
+        package_classes = {}
+
+        for class_name in self.class_names:
+            body = class_name[1:-1] if class_name.startswith("L") and class_name.endswith(";") else class_name
+            parts = body.split("/")
+            pkg_path = ""
+
+            for part in parts[:-1]:
+                next_path = f"{pkg_path}/{part}" if pkg_path else part
+                package_children.setdefault(pkg_path, set()).add(next_path)
+                package_children.setdefault(next_path, set())
+                pkg_path = next_path
+
+            package_classes.setdefault(pkg_path, []).append(class_name)
+
+        self.package_children = {
+            pkg: sorted(children, key=lambda item: item.lower())
+            for pkg, children in package_children.items()
+        }
+        self.package_classes = {}
+        for pkg_path, classes in package_classes.items():
+            classes.sort(key=lambda item: item.split("/")[-1].rstrip(";").lower())
+            self.package_classes[pkg_path] = classes
+
+    def iter_root_packages(self):
+        return self.package_children.get("", [])
+
+    def iter_child_packages(self, pkg_path : str):
+        return self.package_children.get(pkg_path, [])
+
+    def iter_package_classes(self, pkg_path : str):
+        return self.package_classes.get(pkg_path, [])
+
+    def iter_filtered_classes(self, keyword : str, limit : int):
+        keyword = (keyword or "").strip().lower()
+        if not keyword:
+            return []
+
+        ret = []
+        for class_name in self.class_names:
+            if keyword not in dalvik_to_dot(class_name).lower():
+                continue
+            ret.append(class_name)
+            if len(ret) >= limit:
+                break
+        return ret
+
+    def get_source(self, dalvik_class : str):
+        with self._source_lock:
+            old = self.source_cache.get(dalvik_class)
+            if old is not None:
+                return old
+
+        dex_name = self.class_to_dex.get(dalvik_class)
+        if dex_name is None:
+            raise ValueError(f"class not indexed: {dalvik_class}")
+
+        dex_buf = self.dex_buffers[dex_name]
+        from src.asc_client.asc_handler import AscHandler
+
+        source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
+        ret = (dex_name, source)
+        with self._source_lock:
+            self.source_cache[dalvik_class] = ret
+        return ret
+
+    def get_effective_search_workers(self, requested = None):
+        cpu = os.cpu_count() or 4
+        workers = requested if requested is not None else self.max_workers
+        if workers is None or workers <= 0:
+            workers = cpu
+        if len(self.entries) > 1:
+            workers = max(2, workers)
+        return min(len(self.entries), workers)
+
+    def _launch_subprocess_worker(self, entry, find_type, find):
+        result_file = tempfile.NamedTemporaryFile(prefix="asc_gui_find_", suffix=".json", delete=False)
+        result_path = result_file.name
+        result_file.close()
+
+        payload = {
+            "apk_path": self.apk_path,
+            "entry": list(entry),
+            "find_type": find_type,
+            "find": find,
+            "result_path": result_path,
+        }
+
+        cmd = [sys.executable, "-m", "src.asc_client.gui.search_worker"]
+        proc = subprocess.Popen(
+            cmd,
+            cwd=os.getcwd(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc.stdin.write(json.dumps(payload))
+        proc.stdin.close()
+        return proc, result_path
+
+    def _search_with_subprocess_pool(self, workers, find_type, find, progress_callback):
+        total = len(self.entries)
+        hit_count = 0
+        shown = []
+        done = 0
+        idx = 0
+        running = []
+
+        while idx < len(self.entries) or running:
+            while idx < len(self.entries) and len(running) < workers:
+                entry = self.entries[idx]
+                idx += 1
+                proc, result_path = self._launch_subprocess_worker(entry, find_type, find)
+                running.append((proc, result_path, entry[0]))
+
+            if not running:
+                break
+
+            time.sleep(0.01)
+            next_running = []
+            for proc, result_path, dex_name in running:
+                if proc.poll() is None:
+                    next_running.append((proc, result_path, dex_name))
+                    continue
+
+                stderr_text = proc.stderr.read() if proc.stderr is not None else ""
+                if proc.returncode != 0:
+                    try:
+                        os.unlink(result_path)
+                    except OSError:
+                        pass
+                    raise RuntimeError(
+                        f"Search worker failed for {dex_name}: {stderr_text.strip() or proc.returncode}"
+                    )
+
+                with open(result_path, "r", encoding="utf-8") as fp:
+                    payload = json.load(fp)
+                try:
+                    os.unlink(result_path)
+                except OSError:
+                    pass
+
+                lines = payload["lines"]
+                done += 1
+                hit_count += len(lines)
+                if len(shown) < _MAX_UI_RESULTS:
+                    remain = _MAX_UI_RESULTS - len(shown)
+                    for line in lines[:remain]:
+                        shown.append(parse_result_line(line))
+                if progress_callback is not None:
+                    progress_callback(done, total, hit_count)
+
+            running = next_running
+
+        return hit_count, shown
+
+    def search(
+        self,
+        find_type : str,
+        value : str,
+        class_name = None,
+        fuzzy_class : bool = False,
+        max_workers = None,
+        progress_callback = None,
+    ):
+        find_type, find = build_find_query(find_type, value, class_name, fuzzy_class)
+        workers = self.get_effective_search_workers(max_workers)
+        backend = "subprocess"
+        hit_count, shown = self._search_with_subprocess_pool(workers, find_type, find, progress_callback)
+
+        return {
+            "find_type": find_type,
+            "query_value": value,
+            "results": shown,
+            "total_hits": hit_count,
+            "truncated": hit_count > len(shown),
+            "workers": workers,
+            "backend": backend,
+        }
