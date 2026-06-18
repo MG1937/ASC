@@ -105,22 +105,29 @@ def main():
     getclass_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
 
     findrefs_parser = subparsers.add_parser("findrefs", help="Find code references for string/type/method/field.")
-    findrefs_parser.add_argument("dex_path", help="Path to the input DEX file.")
     findrefs_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
     find_subparsers = findrefs_parser.add_subparsers(dest="find_type", required=True)
 
     string_parser = find_subparsers.add_parser("string", help="Find references to a fuzzy string.")
+    string_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    string_parser.add_argument("dex_path", help="Path to the input DEX file.")
     string_parser.add_argument("value", help="Fuzzy string pattern.")
 
     type_parser = find_subparsers.add_parser("type", help="Find references to a fuzzy type descriptor/name.")
+    type_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    type_parser.add_argument("dex_path", help="Path to the input DEX file.")
     type_parser.add_argument("value", help="Fuzzy type pattern.")
 
     method_parser = find_subparsers.add_parser("method", help="Find references to methods.")
+    method_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    method_parser.add_argument("dex_path", help="Path to the input DEX file.")
     method_parser.add_argument("name", nargs="?", default=None, help="Fuzzy method name.")
     method_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
     method_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
 
     field_parser = find_subparsers.add_parser("field", help="Find references to fields.")
+    field_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    field_parser.add_argument("dex_path", help="Path to the input DEX file.")
     field_parser.add_argument("name", nargs="?", default=None, help="Fuzzy field name.")
     field_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
     field_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
