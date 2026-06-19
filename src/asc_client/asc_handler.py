@@ -43,8 +43,8 @@ def _lazy_import():
     _install_pure_python_mutf8_shim()
     from src.asc_core.core.dex.dex_manager import DexManager
     from src.asc_core.findrefs.findrefs_manager import FindRefManager
-    from src.asc_core.utils.decompiler import decompile_dex_bytes
     from src.asc_core.utils.tinydex import DEX
+    from src.asc_core.utils.decompiler import decompile_dex_bytes
 
     _DexManager = DexManager
     _FindRefManager = FindRefManager
@@ -77,13 +77,31 @@ class AscHandler:
         field = dex.fields[idx]
         return f"{field.cls.fullname}->{field.name}"
 
-    def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict) -> list:
+    def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
         _lazy_import()
         dex = _DEX.parse(memoryview(dex_buf), dex_name)
         ref_manager = _FindRefManager(dex)
         query = copy.deepcopy(find)
         matched_idxs = ref_manager.find_ref(query, True)
         mids = query[find_type]
+        if not aggregate:
+            ret = []
+            for i in range(len(mids)):
+                midx = mids[i]
+                if midx is None:
+                    continue
+                idx = matched_idxs[i]
+                if isinstance(midx, list):
+                    midxs = midx
+                else:
+                    midxs = [midx]
+                matched = self._format_matched_name(dex, find_type, idx)
+                for mid in midxs:
+                    ret.append(
+                        f"{dex_name} | {self._format_method(dex, mid)} | matched=({matched})"
+                    )
+            return ret
+
         grouped = defaultdict(set)
         for i in range(len(mids)):
             midx = mids[i]

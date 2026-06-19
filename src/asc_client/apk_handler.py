@@ -255,14 +255,14 @@ def _inflate_dex(mm : mmap.mmap, entry, stop_event = None):
     return data
 
 
-def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict):
+def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggregate : bool = True):
     from src.asc_client.asc_handler import AscHandler
 
     mm = _get_worker_apk_mm(apk_path)
     t0 = time.perf_counter()
     data = _inflate_dex(mm, entry)
     t1 = time.perf_counter()
-    lines = AscHandler(False).findrefs(entry[0], data, find_type, find)
+    lines = AscHandler(False).findrefs(entry[0], data, find_type, find, aggregate=aggregate)
     t2 = time.perf_counter()
     return (
         entry[0],

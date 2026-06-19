@@ -13,6 +13,7 @@ def main():
         entry,
         payload["find_type"],
         payload["find"],
+        aggregate=False,
     )
 
     result = {

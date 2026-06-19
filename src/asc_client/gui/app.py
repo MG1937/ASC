@@ -1,6 +1,8 @@
 import os
 import queue
 import threading
+import time
+import traceback
 import tkinter as tk
 from tkinter import ttk
 
@@ -8,6 +10,14 @@ from src.asc_client.gui.runtime import GuiDexStore, dalvik_to_dot
 
 
 _MAX_FILTER_CLASSES = 5000
+
+
+def _debug_log(enabled : bool, scope : str, msg : str):
+    if not enabled:
+        return
+    tid = threading.get_ident() & 0xFFFF
+    now = time.perf_counter()
+    print(f"[GUI DEBUG] [{scope}] [T{tid:04x}] {now:.6f} {msg}")
 
 
 def _pkg_label(pkg_path : str):
@@ -113,11 +123,12 @@ class SearchDialog:
 
 
 class AscGuiApp:
-    def __init__(self, root, apk_path : str, max_workers : int = 8, debug : bool = False):
+    def __init__(self, root, apk_path : str, max_workers : int = 8, debug : bool = False, search_executor = None):
         self.root = root
         self.apk_path = apk_path
         self.max_workers = max_workers
         self.debug = debug
+        self.search_executor = search_executor
 
         self.store = None
         self.events = queue.Queue()
@@ -135,9 +146,14 @@ class AscGuiApp:
         self._set_controls_enabled(False)
         self._start_load()
         self.root.after(50, self._drain_events)
+        _debug_log(
+            self.debug,
+            "app",
+            f"init apk={self.apk_path} workers={self.max_workers} executor={id(self.search_executor)}",
+        )
 
     def _build_ui(self):
-        self.root.title(f"ASC GUI - {os.path.basename(self.apk_path)}")
+        self.root.title(f"ASC GUI Auth: MG1937 - {os.path.basename(self.apk_path)}")
         self.root.geometry("1500x920")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
@@ -289,14 +305,23 @@ class AscGuiApp:
     def _start_load(self):
         def worker():
             try:
-                store = GuiDexStore(self.apk_path, self.max_workers, self.debug)
+                _debug_log(self.debug, "app", "load worker start")
+                store = GuiDexStore(
+                    self.apk_path,
+                    self.max_workers,
+                    self.debug,
+                    search_executor=self.search_executor,
+                )
                 store.load(
                     lambda done, total, dex_name, class_count: self.events.put(
                         ("load_progress", done, total, dex_name, class_count)
                     )
                 )
                 self.events.put(("load_done", store))
+                _debug_log(self.debug, "app", "load worker done")
             except Exception as e:
+                if self.debug:
+                    traceback.print_exc()
                 self.events.put(("load_error", f"Load failed: {e}"))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -379,12 +404,17 @@ class AscGuiApp:
         if dalvik_class is None or self.store is None:
             return
         self.status_var.set(f"Decompiling {dalvik_to_dot(dalvik_class)}...")
+        _debug_log(self.debug, "app", f"open class request class={dalvik_class}")
 
         def worker():
             try:
+                _debug_log(self.debug, "app", f"open class worker start class={dalvik_class}")
                 dex_name, source = self.store.get_source(dalvik_class)
                 self.events.put(("source_done", dalvik_class, dex_name, source))
+                _debug_log(self.debug, "app", f"open class worker done class={dalvik_class} dex={dex_name}")
             except Exception as e:
+                if self.debug:
+                    traceback.print_exc()
                 self.events.put(("source_error", f"Decompile failed: {e}"))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -411,9 +441,15 @@ class AscGuiApp:
             class_name=class_name or None,
             fuzzy_class=fuzzy_class,
         )
+        _debug_log(
+            self.debug,
+            "app",
+            f"search request type={find_type} value={value!r} class={class_name!r} fuzzy={fuzzy_class}",
+        )
 
         def worker():
             try:
+                _debug_log(self.debug, "app", "search worker start")
                 payload = self.store.search(
                     find_type=find_type,
                     value=value,
@@ -425,13 +461,39 @@ class AscGuiApp:
                     ),
                 )
                 self.events.put(("search_done", payload))
+                _debug_log(
+                    self.debug,
+                    "app",
+                    f"search worker done hits={payload['total_hits']} backend={payload['backend']}",
+                )
             except Exception as e:
+                if self.debug:
+                    traceback.print_exc()
                 self.events.put(("search_error", f"Search failed: {e}"))
 
         threading.Thread(target=worker, daemon=True).start()
 
 
-def launch_gui(apk_path : str, max_workers : int = 8, debug : bool = False):
+def launch_gui(apk_path : str, max_workers : int = 20, debug : bool = False):
     root = tk.Tk()
-    AscGuiApp(root, apk_path, max_workers=max_workers, debug=debug)
-    root.mainloop()
+    from concurrent.futures import ProcessPoolExecutor
+
+    _debug_log(debug, "app", f"launch gui apk={apk_path} workers={max_workers}")
+    search_executor = ProcessPoolExecutor(max_workers=max_workers)
+    app = AscGuiApp(root, apk_path, max_workers=max_workers, debug=debug, search_executor=search_executor)
+    closed = False
+
+    def on_close():
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        _debug_log(debug, "app", "shutdown gui executor")
+        search_executor.shutdown(wait=False, cancel_futures=True)
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    try:
+        root.mainloop()
+    finally:
+        on_close()

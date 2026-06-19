@@ -5,13 +5,50 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import traceback
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 from src.asc_client.apk_handler import _findrefs_worker, _inflate_dex, _parse_cd_dex_entries
 from src.asc_core.utils.tinydex import DEX
 
 
 _MAX_UI_RESULTS = 5000
+_MISSING = object()
+_GUI_MP_MODULES = (
+    "multiprocessing",
+    "multiprocessing.context",
+    "multiprocessing.reduction",
+)
+_GUI_MP_LOCK = threading.Lock()
+
+
+def _debug_log(enabled : bool, scope : str, msg : str):
+    if not enabled:
+        return
+    tid = threading.get_ident() & 0xFFFF
+    now = time.perf_counter()
+    print(f"[GUI DEBUG] [{scope}] [T{tid:04x}] {now:.6f} {msg}")
+
+
+def _multiprocessing_state() -> str:
+    mp_mod = sys.modules.get("multiprocessing")
+    red_mod = sys.modules.get("multiprocessing.reduction")
+    return (
+        f"multiprocessing={type(mp_mod).__name__}"
+        f" reduction={type(red_mod).__name__}"
+    )
+
+
+def _snapshot_modules(names):
+    return {name: sys.modules.get(name, _MISSING) for name in names}
+
+
+def _restore_modules(snapshot):
+    for name, module in snapshot.items():
+        if module is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
 
 
 def format_class_name(name : str) -> str:
@@ -72,10 +109,11 @@ def parse_result_line(line : str):
 
 
 class GuiDexStore:
-    def __init__(self, apk_path : str, max_workers : int = 8, debug : bool = False):
+    def __init__(self, apk_path : str, max_workers : int = 20, debug : bool = False, search_executor = None):
         self.apk_path = apk_path
         self.max_workers = max_workers
         self.debug = debug
+        self.search_executor = search_executor
 
         self.entries = []
         self.dex_buffers = {}
@@ -100,6 +138,7 @@ class GuiDexStore:
             entries.sort(key=lambda x: x[2])
             self.entries = entries
             total = len(entries)
+            _debug_log(self.debug, "runtime", f"load start apk={self.apk_path} dex={total}")
             if total == 0:
                 self.class_names = []
                 return
@@ -129,6 +168,7 @@ class GuiDexStore:
 
             self.class_names = sorted(self.class_to_dex.keys())
             self._build_package_index()
+            _debug_log(self.debug, "runtime", f"load done dex={len(self.entries)} classes={len(self.class_names)}")
         finally:
             mm.close()
             fp.close()
@@ -186,6 +226,7 @@ class GuiDexStore:
         with self._source_lock:
             old = self.source_cache.get(dalvik_class)
             if old is not None:
+                _debug_log(self.debug, "runtime", f"source cache hit class={dalvik_class}")
                 return old
 
         dex_name = self.class_to_dex.get(dalvik_class)
@@ -193,12 +234,27 @@ class GuiDexStore:
             raise ValueError(f"class not indexed: {dalvik_class}")
 
         dex_buf = self.dex_buffers[dex_name]
+        _debug_log(
+            self.debug,
+            "runtime",
+            f"source start class={dalvik_class} dex={dex_name} {_multiprocessing_state()}",
+        )
         from src.asc_client.asc_handler import AscHandler
 
-        source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
+        with _GUI_MP_LOCK:
+            snapshot = _snapshot_modules(_GUI_MP_MODULES)
+            try:
+                source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
+            finally:
+                _restore_modules(snapshot)
         ret = (dex_name, source)
         with self._source_lock:
             self.source_cache[dalvik_class] = ret
+        _debug_log(
+            self.debug,
+            "runtime",
+            f"source done class={dalvik_class} dex={dex_name} {_multiprocessing_state()}",
+        )
         return ret
 
     def get_effective_search_workers(self, requested = None):
@@ -209,6 +265,61 @@ class GuiDexStore:
         if len(self.entries) > 1:
             workers = max(2, workers)
         return min(len(self.entries), workers)
+
+    def _search_with_process_pool(self, executor, workers, find_type, find, progress_callback):
+        total = len(self.entries)
+        hit_count = 0
+        shown = []
+        with _GUI_MP_LOCK:
+            _debug_log(
+                self.debug,
+                "runtime",
+                f"search process start dex={total} workers={workers} {_multiprocessing_state()} executor={id(executor)}",
+            )
+
+            futures = {}
+            for entry in self.entries:
+                try:
+                    _debug_log(self.debug, "runtime", f"submit dex={entry[0]}")
+                    fut = executor.submit(_findrefs_worker, self.apk_path, entry, find_type, find, False)
+                except Exception as e:
+                    _debug_log(
+                        self.debug,
+                        "runtime",
+                        f"submit failed dex={entry[0]} err={type(e).__name__}: {e} {_multiprocessing_state()}",
+                    )
+                    traceback.print_exc()
+                    raise
+                futures[fut] = entry[0]
+
+        done = 0
+        for fut in as_completed(futures):
+            dex_name = futures.pop(fut)
+            try:
+                dex_name, lines, _inflate_us, _process_us, _pid = fut.result()
+            except Exception as e:
+                _debug_log(
+                    self.debug,
+                    "runtime",
+                    f"result failed dex={dex_name} err={type(e).__name__}: {e} {_multiprocessing_state()}",
+                )
+                traceback.print_exc()
+                raise
+            done += 1
+            hit_count += len(lines)
+            _debug_log(
+                self.debug,
+                "runtime",
+                f"result ok dex={dex_name} pid={_pid} hits={len(lines)} done={done}/{total}",
+            )
+            if len(shown) < _MAX_UI_RESULTS:
+                remain = _MAX_UI_RESULTS - len(shown)
+                for line in lines[:remain]:
+                    shown.append(parse_result_line(line))
+            if progress_callback is not None:
+                progress_callback(done, total, hit_count)
+
+        return hit_count, shown
 
     def _launch_subprocess_worker(self, entry, find_type, find):
         result_file = tempfile.NamedTemporaryFile(prefix="asc_gui_find_", suffix=".json", delete=False)
@@ -303,8 +414,23 @@ class GuiDexStore:
     ):
         find_type, find = build_find_query(find_type, value, class_name, fuzzy_class)
         workers = self.get_effective_search_workers(max_workers)
-        backend = "subprocess"
-        hit_count, shown = self._search_with_subprocess_pool(workers, find_type, find, progress_callback)
+        _debug_log(
+            self.debug,
+            "runtime",
+            f"search request type={find_type} value={value!r} class={class_name!r} fuzzy={fuzzy_class} workers={workers}",
+        )
+        if self.search_executor is not None:
+            backend = "process"
+            hit_count, shown = self._search_with_process_pool(
+                self.search_executor,
+                workers,
+                find_type,
+                find,
+                progress_callback,
+            )
+        else:
+            backend = "subprocess"
+            hit_count, shown = self._search_with_subprocess_pool(workers, find_type, find, progress_callback)
 
         return {
             "find_type": find_type,
