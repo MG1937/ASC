@@ -1,6 +1,7 @@
 from findrefs.locator.base_locator import BaseLocator
 import struct
 import re
+import time
 
 # Auth: MG1937
 _STRUCT_I = struct.Struct('<I')
@@ -18,6 +19,7 @@ class StringLocator(BaseLocator):
     def _build_map(self):
         if self.parsed:
             return
+        t_start = time.perf_counter() if self.debug else None
         string_ids_off, string_ids_size = self.header.strings
         stridx_map = self.stridx_map
         buf = self.buf
@@ -29,6 +31,7 @@ class StringLocator(BaseLocator):
             stridx_map[data_offset] = idx
         self.strdata_end = data_offset
         self.parsed = True
+        self._debug_log("build_map", t_start, len(stridx_map))
 
     def _match_string_offset(self, string : str):
         buf = self.buf
@@ -49,6 +52,7 @@ class StringLocator(BaseLocator):
         # return offsets
 
     def locate(self, string : str) -> set:
+        t_start = time.perf_counter() if self.debug else None
         if not self.parsed:
             self._build_map()
         stridx_map = self.stridx_map
@@ -56,5 +60,6 @@ class StringLocator(BaseLocator):
         for offset in self._match_string_offset(string):
             located_idx.add(stridx_map[offset] - 1)
         # return set for O(1) lookup
+        self._debug_log("locate", t_start, len(located_idx))
         return located_idx
         

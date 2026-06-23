@@ -1,6 +1,7 @@
 from findrefs.locator.base_locator import BaseLocator
 from collections import defaultdict
 import struct
+import time
 
 # Auth: MG1937
 _STRUCT_HHI = struct.Struct('<HHI')
@@ -24,6 +25,7 @@ class MethodLocator(BaseLocator):
     def _build_map(self):
         if self.parsed:
             return
+        t_start = time.perf_counter() if self.debug else None
         method_ids_off, method_ids_size = self.header.methods
         clz_maps = self.clz_maps
         method_maps = self.method_maps
@@ -35,6 +37,7 @@ class MethodLocator(BaseLocator):
             clz_maps[class_idx].add(method_idx)
             method_maps[name_idx].add(method_idx)
         self.parsed = True
+        self._debug_log("build_map", t_start, method_ids_size)
 
     # which is different with type locator, this func for precise clz name
     # while type locator is for fuzzy search
@@ -81,6 +84,7 @@ class MethodLocator(BaseLocator):
     # if class is None, find out all method idx that contains the fuzzy method name while dont give shit about class
     # if class is set, find out all methods below this class which matches the method condition
     def locate(self, find : dict) -> set:
+        t_start = time.perf_counter() if self.debug else None
         if not self.parsed:
             self._build_map()
 
@@ -94,6 +98,7 @@ class MethodLocator(BaseLocator):
         if method == "":
             method = None
         if clz is None and method is None:
+            self._debug_log("locate", t_start, 0)
             return set()
 
         if clz is None:
@@ -105,24 +110,31 @@ class MethodLocator(BaseLocator):
                 if mids is None:
                     continue
                 ret.update(mids)
+            self._debug_log("locate", t_start, len(ret))
             return ret
 
         if clz_precise:
             type_idx = self._find_type_idx_precisely(clz)
             if type_idx == -1:
+                self._debug_log("locate", t_start, 0)
                 return set()
             clz_mids = self.clz_maps.get(type_idx)
             if clz_mids is None:
+                self._debug_log("locate", t_start, 0)
                 return set()
             clz_mids = set(clz_mids)
         else:
             clz_mids = self._collect_clz_mids(self.type_locator.locate(clz))
             if not clz_mids:
+                self._debug_log("locate", t_start, 0)
                 return set()
         if method is None:
+            self._debug_log("locate", t_start, len(clz_mids))
             return clz_mids
         if clz_precise:
-            return self._match_clz_mids(clz_mids, method)
+            ret = self._match_clz_mids(clz_mids, method)
+            self._debug_log("locate", t_start, len(ret))
+            return ret
 
         name_idxs = self.str_locator.locate(method)
         ret = set()
@@ -130,4 +142,5 @@ class MethodLocator(BaseLocator):
             mids = self.method_maps.get(name_idx)
             if mids is not None:
                 ret.update(clz_mids & mids)
+        self._debug_log("locate", t_start, len(ret))
         return ret

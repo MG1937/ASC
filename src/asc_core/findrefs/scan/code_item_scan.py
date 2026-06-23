@@ -138,30 +138,35 @@ class CodeItemScanner:
         mark_idx = []
         self.mark_idx = mark_idx
 
-        if idx_type == "string":
-            for match in STRINGIDX_OPS.finditer(submem):
-                # buggy, might have oob issue 20260617
-                idx_off = match.start() + 2
-                if match.group() == b'\x1a':
+        try:
+            if idx_type == "string":
+                for match in STRINGIDX_OPS.finditer(submem):
+                    # buggy, might have oob issue 20260617
+                    idx_off = match.start() + 2
+                    if match.group() == b'\x1a':
+                        idx = _STRUCT_H.unpack_from(submem, idx_off)[0]
+                    else: # const-string/jumbo
+                        idx = _STRUCT_I.unpack_from(submem, idx_off)[0]
+                    if idx not in idxs:
+                        continue
+                    matched_offset.append(idx_off + off_start - 2)
+                    if mark:
+                        mark_idx.append(idx)
+                return matched_offset
+            else:
+                for match in OPCODE_PATTERNS[idx_type].finditer(submem):
+                    # buggy, might have oob issue 20260617
+                    idx_off = match.start() + 2
                     idx = _STRUCT_H.unpack_from(submem, idx_off)[0]
-                else: # const-string/jumbo
-                    idx = _STRUCT_I.unpack_from(submem, idx_off)[0]
-                if idx not in idxs:
-                    continue
-                matched_offset.append(idx_off + off_start - 2)
-                if mark:
-                    mark_idx.append(idx)
-            return matched_offset
-        else:
-            for match in OPCODE_PATTERNS[idx_type].finditer(submem):
-                # buggy, might have oob issue 20260617
-                idx_off = match.start() + 2
-                idx = _STRUCT_H.unpack_from(submem, idx_off)[0]
-                if idx not in idxs:
-                    continue
-                matched_offset.append(idx_off + off_start - 2)
-                if mark:
-                    mark_idx.append(idx)                
+                    if idx not in idxs:
+                        continue
+                    matched_offset.append(idx_off + off_start - 2)
+                    if mark:
+                        mark_idx.append(idx)                
+                return matched_offset
+        except:
+            # oob fallback 20260623
+            # use try-catch to handle memory bound, avoid additional preformance loss
             return matched_offset
 
     # scan struct: {"string": {idx1, idx2...}, "field": ...,}

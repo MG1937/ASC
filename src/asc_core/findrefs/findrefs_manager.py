@@ -8,8 +8,9 @@ from findrefs.scan.code_item_scan import CodeItemScanner
 
 
 class FindRefManager:
-    def __init__(self, dex):
+    def __init__(self, dex, debug = False):
         self.dex = dex
+        self.debug = debug
         self.str_locator = None
         self.type_locator = None
         self.method_locator = None
@@ -21,6 +22,7 @@ class FindRefManager:
         locator = self.str_locator
         if locator is None:
             locator = StringLocator(self.dex)
+            locator.set_debug(self.debug)
             self.str_locator = locator
         if build and not locator.parsed:
             locator._build_map()
@@ -30,6 +32,7 @@ class FindRefManager:
         locator = self.type_locator
         if locator is None:
             locator = TypeLocator(self.dex)
+            locator.set_debug(self.debug)
             locator.set_str_locator(self._get_str_locator(True))
             self.type_locator = locator
         if build and not locator.parsed:
@@ -40,6 +43,7 @@ class FindRefManager:
         locator = self.method_locator
         if locator is None:
             locator = MethodLocator(self.dex)
+            locator.set_debug(self.debug)
             locator.set_str_locator(self._get_str_locator(True))
             locator.set_type_locator(self._get_type_locator(True))
             self.method_locator = locator
@@ -51,6 +55,7 @@ class FindRefManager:
         locator = self.field_locator
         if locator is None:
             locator = FieldLocator(self.dex)
+            locator.set_debug(self.debug)
             locator.set_str_locator(self._get_str_locator(True))
             locator.set_type_locator(self._get_type_locator(True))
             self.field_locator = locator
@@ -62,6 +67,7 @@ class FindRefManager:
         insn_locator = self.insn_locator
         if insn_locator is None:
             insn_locator = InsnLocator(self.dex)
+            insn_locator.set_debug(self.debug)
             self.insn_locator = insn_locator
         if not insn_locator.parsed:
             insn_locator.parse()
