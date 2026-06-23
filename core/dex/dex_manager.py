@@ -12,10 +12,20 @@ from core.dex.dex_builder import DexBuilder
 # this part gen by LLM, I already build the infra, let LLM arrange this
 
 class DexManager:
-    def __init__(self, dex_path: str, debug: bool = False):
-        self.dex_path = dex_path
-        self.debug = debug
+    def __init__(self, dex_element, debug: bool = False):
+        self.dex_path = None
+        self.dex_name = ""
         self.dexraw = None
+        if isinstance(dex_element, memoryview):
+            self.dexraw = dex_element
+            self.dex_name = "<memory>"
+        elif isinstance(dex_element, (bytes, bytearray)):
+            self.dexraw = memoryview(dex_element)
+            self.dex_name = "<memory>"
+        else:
+            self.dex_path = dex_element
+            self.dex_name = os.path.basename(dex_element)
+        self.debug = debug
         self.dex = None
         
         self._load_dex()
@@ -27,11 +37,12 @@ class DexManager:
         # self.dexraw = bytearray(size)
         # with open(self.dex_path, "rb") as f:
         #     f.readinto(self.dexraw)
-        f = open(self.dex_path, "rb")
-        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        self.dexraw = mm
+        if self.dex_path is not None:
+            f = open(self.dex_path, "rb")
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            self.dexraw = mm
 
-        self.dex = DEX.parse(self.dexraw, os.path.basename(self.dex_path))
+        self.dex = DEX.parse(self.dexraw, self.dex_name)
         
         if self.debug:
             t_end = time.perf_counter()
@@ -87,3 +98,4 @@ class DexManager:
             print(f"[DEBUG] Total Extraction Time: {(t_build_end - t_start)*1000000:.2f} us")
             
         return new_dex_bytes
+
