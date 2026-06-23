@@ -2,6 +2,7 @@ from findrefs.locator.base_locator import BaseLocator
 from utils.leb128 import read_uleb128_fast, read_uleb128_len
 from collections import defaultdict
 import struct
+import time
 
 # Auth MG1937
 _STRUCT_I = struct.Struct('<I')
@@ -129,14 +130,17 @@ class InsnLocator(BaseLocator):
     def parse(self):
         if self.parsed:
             return
+        t_start = time.perf_counter() if self.debug else None
         self._build_map_bymap()
         tmp_list = self.insn_maps.keys()
         self.code_item_start = min(tmp_list) << 4
         self.code_item_end = (max(tmp_list) + 1) << 4
         self.parsed = True
+        self._debug_log("parse", t_start, len(self.insn_maps))
 
     # insn offset to method idx, warn: midx can be None or list
     def locate(self, offsets : list) -> set:
+        t_start = time.perf_counter() if self.debug else None
         if not self.parsed:
             # parse timing controlled by manager
             return None
@@ -154,5 +158,6 @@ class InsnLocator(BaseLocator):
                 ret_table.add(midx)
             """
             # dense table is fuzzy, insn range verify back to method verify stage! 20260617
+        self._debug_log("locate", t_start, len(ret_table))
         return ret_table
             

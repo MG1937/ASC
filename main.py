@@ -85,7 +85,7 @@ def _handle_findrefs(args):
 
     manager = DexManager(args.dex_path, debug=args.debug)
     find_type, find = _get_find_query(args)
-    ref_manager = FindRefManager(manager.dex)
+    ref_manager = FindRefManager(manager.dex, args.debug)
     matched_idxs = ref_manager.find_ref(find, True)
     mids = find[find_type]
 

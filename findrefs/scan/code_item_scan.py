@@ -169,6 +169,9 @@ class CodeItemScanner:
     # others such as proto, methodhandle is too FUCKING wired, leave it for now.. 20260617
     def scan(self, scan : dict, mark = False):
         for type_ in scan:
+            if not scan[type_]:
+                scan[type_] = []
+                continue
             insn_offs = self._scan_code_item(type_, scan[type_], mark)
             mids = self.insn_locator.locate(insn_offs)
             scan[type_] = mids
