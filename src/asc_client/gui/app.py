@@ -133,6 +133,7 @@ class AscGuiApp:
         self.store = None
         self.events = queue.Queue()
         self.search_dialog = None
+        self.search_inflight = False
 
         self.class_filter_var = tk.StringVar()
         self.class_info_var = tk.StringVar(value="Classes")
@@ -151,6 +152,27 @@ class AscGuiApp:
             "app",
             f"init apk={self.apk_path} workers={self.max_workers} executor={id(self.search_executor)}",
         )
+
+    def _ensure_search_executor(self):
+        if self.search_executor is not None:
+            return self.search_executor
+        from concurrent.futures import ProcessPoolExecutor
+
+        self.search_executor = ProcessPoolExecutor(max_workers=self.max_workers)
+        if self.store is not None:
+            self.store.search_executor = self.search_executor
+        _debug_log(self.debug, "app", f"create search executor workers={self.max_workers}")
+        return self.search_executor
+
+    def _dispose_search_executor(self):
+        executor = self.search_executor
+        self.search_executor = None
+        if self.store is not None:
+            self.store.search_executor = None
+        if executor is None:
+            return
+        _debug_log(self.debug, "app", "dispose search executor")
+        executor.shutdown(wait=False, cancel_futures=False)
 
     def _build_ui(self):
         self.root.title(f"ASC GUI Auth: MG1937 - {os.path.basename(self.apk_path)}")
@@ -293,12 +315,16 @@ class AscGuiApp:
             return
         if kind == "search_done" and self.search_dialog is not None:
             payload = event[1]
+            self.search_inflight = False
+            self.search_button.config(state=tk.NORMAL)
             self.search_dialog.finish(payload)
             self.status_var.set(
                 f"Search done. hits={payload['total_hits']} workers={payload['workers']} backend={payload['backend']}"
             )
             return
         if kind == "search_error" and self.search_dialog is not None:
+            self.search_inflight = False
+            self.search_button.config(state=tk.NORMAL)
             self.search_dialog.fail(event[1])
             self.status_var.set(event[1])
 
@@ -422,6 +448,9 @@ class AscGuiApp:
     def _start_search(self):
         if self.store is None:
             return
+        if self.search_inflight:
+            self.status_var.set("Search is already running")
+            return
 
         find_type = self.search_type_var.get()
         value = self.search_value_var.get().strip()
@@ -441,6 +470,8 @@ class AscGuiApp:
             class_name=class_name or None,
             fuzzy_class=fuzzy_class,
         )
+        self.search_inflight = True
+        self.search_button.config(state=tk.DISABLED)
         _debug_log(
             self.debug,
             "app",
@@ -450,6 +481,7 @@ class AscGuiApp:
         def worker():
             try:
                 _debug_log(self.debug, "app", "search worker start")
+                self._ensure_search_executor()
                 payload = self.store.search(
                     find_type=find_type,
                     value=value,
@@ -470,17 +502,17 @@ class AscGuiApp:
                 if self.debug:
                     traceback.print_exc()
                 self.events.put(("search_error", f"Search failed: {e}"))
+            finally:
+                self._dispose_search_executor()
 
         threading.Thread(target=worker, daemon=True).start()
 
 
 def launch_gui(apk_path : str, max_workers : int = 20, debug : bool = False):
     root = tk.Tk()
-    from concurrent.futures import ProcessPoolExecutor
 
     _debug_log(debug, "app", f"launch gui apk={apk_path} workers={max_workers}")
-    search_executor = ProcessPoolExecutor(max_workers=max_workers)
-    app = AscGuiApp(root, apk_path, max_workers=max_workers, debug=debug, search_executor=search_executor)
+    app = AscGuiApp(root, apk_path, max_workers=max_workers, debug=debug, search_executor=None)
     closed = False
 
     def on_close():
@@ -488,8 +520,8 @@ def launch_gui(apk_path : str, max_workers : int = 20, debug : bool = False):
         if closed:
             return
         closed = True
-        _debug_log(debug, "app", "shutdown gui executor")
-        search_executor.shutdown(wait=False, cancel_futures=True)
+        _debug_log(debug, "app", "shutdown gui")
+        app._dispose_search_executor()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
