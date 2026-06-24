@@ -103,22 +103,27 @@ class SearchDialog:
         self.status_var.set(f"Searching {done}/{total} dex, hits={hit_count}")
 
     def finish(self, payload):
-        self.rows = payload["results"]
-        self.tree.delete(*self.tree.get_children())
-        for idx, row in enumerate(self.rows):
+        if not self.rows and payload["results"]:
+            self.append_results(payload["results"])
+        msg = f"Done. hits={payload['total_hits']} workers={payload['workers']} backend={payload['backend']}"
+        # if payload["truncated"]:
+            # msg += f" showing first {len(payload['results'])}"
+        self.status_var.set(msg)
+        self.progress_var.set(100)
+
+    def append_results(self, rows):
+        if not rows:
+            return
+        start_idx = len(self.rows)
+        self.rows.extend(rows)
+        for offset, row in enumerate(rows):
             method_name = row["method_text"].split("->", 1)[1]
             self.tree.insert(
                 "",
                 tk.END,
-                iid=str(idx),
+                iid=str(start_idx + offset),
                 values=(row["dex_name"], row["class_display"], method_name, row["matched_text"]),
             )
-
-        msg = f"Done. hits={payload['total_hits']} workers={payload['workers']} backend={payload['backend']}"
-        if payload["truncated"]:
-            msg += f" showing first {len(payload['results'])}"
-        self.status_var.set(msg)
-        self.progress_var.set(100)
 
     def fail(self, message : str):
         self.status_var.set(message)
@@ -367,6 +372,12 @@ class AscGuiApp:
             return
         if kind == "search_progress" and self.search_dialog is not None:
             _kind, done, total, hit_count = event
+            self.search_dialog.update_progress(done, total, hit_count)
+            self.status_var.set(f"Searching {done}/{total} dex, hits={hit_count}")
+            return
+        if kind == "search_batch" and self.search_dialog is not None:
+            _kind, rows, done, total, hit_count = event
+            self.search_dialog.append_results(rows)
             self.search_dialog.update_progress(done, total, hit_count)
             self.status_var.set(f"Searching {done}/{total} dex, hits={hit_count}")
             return
@@ -754,6 +765,9 @@ class AscGuiApp:
                     max_workers=self.max_workers,
                     progress_callback=lambda done, total, hit_count: self.events.put(
                         ("search_progress", done, total, hit_count)
+                    ),
+                    result_callback=lambda rows, done, total, hit_count: self.events.put(
+                        ("search_batch", rows, done, total, hit_count)
                     ),
                 )
                 self.events.put(("search_done", payload))

@@ -259,7 +259,7 @@ class GuiDexStore:
             workers = max(2, workers)
         return min(len(self.entries), workers)
 
-    def _search_with_process_pool(self, executor, workers, find_type, find, progress_callback):
+    def _search_with_process_pool(self, executor, workers, find_type, find, progress_callback, result_callback = None):
         total = len(self.entries)
         hit_count = 0
         shown = []
@@ -305,10 +305,15 @@ class GuiDexStore:
                 "runtime",
                 f"result ok dex={dex_name} pid={_pid} hits={len(lines)} done={done}/{total}",
             )
+            batch_rows = []
             if len(shown) < _MAX_UI_RESULTS:
                 remain = _MAX_UI_RESULTS - len(shown)
                 for line in lines[:remain]:
-                    shown.append(parse_result_line(line))
+                    row = parse_result_line(line)
+                    shown.append(row)
+                    batch_rows.append(row)
+            if batch_rows and result_callback is not None:
+                result_callback(batch_rows, done, total, hit_count)
             if progress_callback is not None:
                 progress_callback(done, total, hit_count)
 
@@ -340,7 +345,7 @@ class GuiDexStore:
         proc.stdin.close()
         return proc, result_path
 
-    def _search_with_subprocess_pool(self, workers, find_type, find, progress_callback):
+    def _search_with_subprocess_pool(self, workers, find_type, find, progress_callback, result_callback = None):
         total = len(self.entries)
         hit_count = 0
         shown = []
@@ -358,7 +363,7 @@ class GuiDexStore:
             if not running:
                 break
 
-            time.sleep(0.01)
+            # time.sleep(0.01)
             next_running = []
             for proc, result_path, dex_name in running:
                 if proc.poll() is None:
@@ -385,10 +390,15 @@ class GuiDexStore:
                 lines = payload["lines"]
                 done += 1
                 hit_count += len(lines)
+                batch_rows = []
                 if len(shown) < _MAX_UI_RESULTS:
                     remain = _MAX_UI_RESULTS - len(shown)
                     for line in lines[:remain]:
-                        shown.append(parse_result_line(line))
+                        row = parse_result_line(line)
+                        shown.append(row)
+                        batch_rows.append(row)
+                if batch_rows and result_callback is not None:
+                    result_callback(batch_rows, done, total, hit_count)
                 if progress_callback is not None:
                     progress_callback(done, total, hit_count)
 
@@ -404,6 +414,7 @@ class GuiDexStore:
         fuzzy_class : bool = False,
         max_workers = None,
         progress_callback = None,
+        result_callback = None,
     ):
         find_type, find = build_find_query(find_type, value, class_name, fuzzy_class)
         workers = self.get_effective_search_workers(max_workers)
@@ -420,17 +431,24 @@ class GuiDexStore:
                 find_type,
                 find,
                 progress_callback,
+                result_callback,
             )
         else:
             backend = "subprocess"
-            hit_count, shown = self._search_with_subprocess_pool(workers, find_type, find, progress_callback)
+            hit_count, shown = self._search_with_subprocess_pool(
+                workers,
+                find_type,
+                find,
+                progress_callback,
+                result_callback,
+            )
 
         return {
             "find_type": find_type,
             "query_value": value,
             "results": shown,
             "total_hits": hit_count,
-            "truncated": hit_count > len(shown),
+            # "truncated": hit_count > len(shown),
             "workers": workers,
             "backend": backend,
         }
