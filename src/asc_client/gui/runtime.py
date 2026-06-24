@@ -13,12 +13,6 @@ from src.asc_core.utils.tinydex import DEX
 
 
 _MAX_UI_RESULTS = 5000
-_MISSING = object()
-_GUI_MP_MODULES = (
-    "multiprocessing",
-    "multiprocessing.context",
-    "multiprocessing.reduction",
-)
 _GUI_MP_LOCK = threading.Lock()
 
 
@@ -39,16 +33,15 @@ def _multiprocessing_state() -> str:
     )
 
 
-def _snapshot_modules(names):
-    return {name: sys.modules.get(name, _MISSING) for name in names}
+def _snapshot_sys_modules():
+    return dict(sys.modules)
 
 
-def _restore_modules(snapshot):
-    for name, module in snapshot.items():
-        if module is _MISSING:
+def _restore_sys_modules(snapshot):
+    for name in tuple(sys.modules.keys()):
+        if name not in snapshot:
             sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    sys.modules.update(snapshot)
 
 
 def format_class_name(name : str) -> str:
@@ -242,11 +235,11 @@ class GuiDexStore:
         from src.asc_client.asc_handler import AscHandler
 
         with _GUI_MP_LOCK:
-            snapshot = _snapshot_modules(_GUI_MP_MODULES)
+            snapshot = _snapshot_sys_modules()
             try:
                 source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
             finally:
-                _restore_modules(snapshot)
+                _restore_sys_modules(snapshot)
         ret = (dex_name, source)
         with self._source_lock:
             self.source_cache[dalvik_class] = ret

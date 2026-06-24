@@ -10,6 +10,15 @@ from src.asc_client.gui.runtime import GuiDexStore, dalvik_to_dot
 
 
 _MAX_FILTER_CLASSES = 5000
+_JAVA_KEYWORDS = {
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
+    "const", "continue", "default", "do", "double", "else", "enum", "extends", "final",
+    "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
+    "interface", "long", "native", "new", "package", "private", "protected", "public",
+    "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+    "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false",
+    "null",
+}
 
 
 def _debug_log(enabled : bool, scope : str, msg : str):
@@ -142,8 +151,14 @@ class AscGuiApp:
         self.search_value_var = tk.StringVar()
         self.search_class_var = tk.StringVar()
         self.fuzzy_class_var = tk.BooleanVar(value=False)
+        self.editor_find_var = tk.StringVar()
+        self.editor_find_status_var = tk.StringVar(value="")
+        self._highlight_generation = 0
+        self._highlight_apply_batch = 400
+        self._highlight_apply_job = None
 
         self._build_ui()
+        self._bind_editor_shortcuts()
         self._set_controls_enabled(False)
         self._start_load()
         self.root.after(50, self._drain_events)
@@ -255,15 +270,51 @@ class AscGuiApp:
         source_frame = ttk.Frame(right)
         source_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         source_frame.columnconfigure(0, weight=1)
-        source_frame.rowconfigure(0, weight=1)
-        self.source_text = tk.Text(source_frame, wrap="none")
-        self.source_text.grid(row=0, column=0, sticky="nsew")
+        source_frame.rowconfigure(1, weight=1)
+
+        self.editor_find_frame = ttk.Frame(source_frame)
+        self.editor_find_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.editor_find_frame.columnconfigure(1, weight=1)
+        ttk.Label(self.editor_find_frame, text="Find").grid(row=0, column=0, sticky="w")
+        self.editor_find_entry = ttk.Entry(self.editor_find_frame, textvariable=self.editor_find_var)
+        self.editor_find_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
+        self.editor_find_entry.bind("<Return>", self._on_editor_find_next)
+        self.editor_find_entry.bind("<Shift-Return>", self._on_editor_find_prev)
+        self.editor_find_entry.bind("<Escape>", self._hide_editor_find)
+        self.editor_find_entry.bind("<KeyRelease>", self._on_editor_find_changed)
+        ttk.Button(self.editor_find_frame, text="Next", command=self._editor_find_next).grid(
+            row=0, column=2, sticky="e"
+        )
+        ttk.Button(self.editor_find_frame, text="Prev", command=self._editor_find_prev).grid(
+            row=0, column=3, sticky="e", padx=(6, 0)
+        )
+        ttk.Button(self.editor_find_frame, text="Close", command=self._hide_editor_find).grid(
+            row=0, column=4, sticky="e", padx=(6, 0)
+        )
+        ttk.Label(self.editor_find_frame, textvariable=self.editor_find_status_var).grid(
+            row=0, column=5, sticky="e", padx=(12, 0)
+        )
+
+        self.source_text = tk.Text(source_frame, wrap="none", background="#ffffff", foreground="#1f1f1f")
+        self.source_text.grid(row=1, column=0, sticky="nsew")
         src_y = ttk.Scrollbar(source_frame, orient=tk.VERTICAL, command=self.source_text.yview)
-        src_y.grid(row=0, column=1, sticky="ns")
+        src_y.grid(row=1, column=1, sticky="ns")
         src_x = ttk.Scrollbar(source_frame, orient=tk.HORIZONTAL, command=self.source_text.xview)
-        src_x.grid(row=1, column=0, sticky="ew")
+        src_x.grid(row=2, column=0, sticky="ew")
         self.source_text.config(yscrollcommand=src_y.set, xscrollcommand=src_x.set)
+        self.source_text.tag_configure("java_keyword", foreground="#0000cc")
+        self.source_text.tag_configure("java_comment", foreground="#008000")
+        self.source_text.tag_configure("java_string", foreground="#a31515")
+        self.source_text.tag_configure("java_annotation", foreground="#2b91af")
+        self.source_text.tag_configure("find_match", background="#fff2a8", foreground="#1f1f1f")
+        self.source_text.tag_configure("find_current", background="#ffc94d", foreground="#1f1f1f")
+        self.editor_find_frame.grid_remove()
         self._on_search_type_changed()
+
+    def _bind_editor_shortcuts(self):
+        self.root.bind("<Control-f>", self._show_editor_find)
+        self.root.bind("<Control-F>", self._show_editor_find)
+        self.source_text.bind("<Escape>", self._hide_editor_find)
 
     def _set_controls_enabled(self, enabled : bool):
         state = tk.NORMAL if enabled else tk.DISABLED
@@ -303,7 +354,13 @@ class AscGuiApp:
             _kind, dalvik_class, dex_name, source = event
             self.source_text.delete("1.0", tk.END)
             self.source_text.insert("1.0", source)
+            self._start_async_highlight(source)
+            self._refresh_editor_find_marks(reset_cursor=True)
             self.status_var.set(f"Opened {dalvik_to_dot(dalvik_class)} from {dex_name}")
+            return
+        if kind == "highlight_ready":
+            _kind, generation, spans = event
+            self._apply_highlight_spans_async(generation, spans)
             return
         if kind == "source_error":
             self.status_var.set(event[1])
@@ -425,6 +482,213 @@ class AscGuiApp:
         fuzzy_state = tk.NORMAL if need_class and self.store is not None else tk.DISABLED
         self.search_class_entry.config(state=class_state)
         self.fuzzy_class_check.config(state=fuzzy_state)
+
+    def _tag_range(self, tag_name : str, start : int, end : int):
+        if end <= start:
+            return
+        self.source_text.tag_add(tag_name, f"1.0+{start}c", f"1.0+{end}c")
+
+    def _clear_source_tags(self):
+        for tag_name in ("java_keyword", "java_comment", "java_string", "java_annotation"):
+            self.source_text.tag_remove(tag_name, "1.0", tk.END)
+
+    def _collect_basic_java_highlight_spans(self, text : str):
+        spans = {
+            "java_keyword": [],
+            "java_comment": [],
+            "java_string": [],
+            "java_annotation": [],
+        }
+        n = len(text)
+        i = 0
+        while i < n:
+            ch = text[i]
+
+            if ch == "/" and i + 1 < n:
+                nxt = text[i + 1]
+                if nxt == "/":
+                    start = i
+                    i += 2
+                    while i < n and text[i] != "\n":
+                        i += 1
+                    spans["java_comment"].append((start, i))
+                    continue
+                if nxt == "*":
+                    start = i
+                    i += 2
+                    while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                        i += 1
+                    i = min(i + 2, n)
+                    spans["java_comment"].append((start, i))
+                    continue
+
+            if ch == '"' or ch == "'":
+                quote = ch
+                start = i
+                i += 1
+                while i < n:
+                    cur = text[i]
+                    if cur == "\\":
+                        i += 2
+                        continue
+                    if cur == quote:
+                        i += 1
+                        break
+                    i += 1
+                spans["java_string"].append((start, i))
+                continue
+
+            if ch == "@":
+                start = i
+                i += 1
+                while i < n and (text[i].isalnum() or text[i] in "._$"):
+                    i += 1
+                spans["java_annotation"].append((start, i))
+                continue
+
+            if ch.isalpha() or ch == "_":
+                start = i
+                i += 1
+                while i < n and (text[i].isalnum() or text[i] in "_$"):
+                    i += 1
+                token = text[start:i]
+                if token in _JAVA_KEYWORDS:
+                    spans["java_keyword"].append((start, i))
+                continue
+
+            i += 1
+        return spans
+
+    def _start_async_highlight(self, text : str):
+        self._highlight_generation += 1
+        generation = self._highlight_generation
+        if self._highlight_apply_job is not None:
+            try:
+                self.root.after_cancel(self._highlight_apply_job)
+            except tk.TclError:
+                pass
+            self._highlight_apply_job = None
+        self._clear_source_tags()
+
+        def worker():
+            spans = self._collect_basic_java_highlight_spans(text)
+            self.events.put(("highlight_ready", generation, spans))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_highlight_spans_async(self, generation : int, spans):
+        if generation != self._highlight_generation:
+            return
+        work_items = []
+        for tag_name in ("java_comment", "java_string", "java_annotation", "java_keyword"):
+            for start, end in spans[tag_name]:
+                work_items.append((tag_name, start, end))
+        if not work_items:
+            return
+
+        def apply_chunk(offset : int = 0):
+            if generation != self._highlight_generation:
+                self._highlight_apply_job = None
+                return
+            end_offset = min(offset + self._highlight_apply_batch, len(work_items))
+            for idx in range(offset, end_offset):
+                tag_name, start, end = work_items[idx]
+                self._tag_range(tag_name, start, end)
+            if end_offset < len(work_items):
+                self._highlight_apply_job = self.root.after(1, apply_chunk, end_offset)
+            else:
+                self._highlight_apply_job = None
+
+        apply_chunk()
+
+    def _show_editor_find(self, _event = None):
+        self.editor_find_frame.grid()
+        self.editor_find_entry.focus_set()
+        self.editor_find_entry.selection_range(0, tk.END)
+        self._refresh_editor_find_marks(reset_cursor=True)
+        return "break"
+
+    def _hide_editor_find(self, _event = None):
+        self.editor_find_frame.grid_remove()
+        self.source_text.tag_remove("find_match", "1.0", tk.END)
+        self.source_text.tag_remove("find_current", "1.0", tk.END)
+        self.editor_find_status_var.set("")
+        self.source_text.focus_set()
+        return "break"
+
+    def _refresh_editor_find_marks(self, reset_cursor : bool = False):
+        needle = self.editor_find_var.get()
+        self.source_text.tag_remove("find_match", "1.0", tk.END)
+        self.source_text.tag_remove("find_current", "1.0", tk.END)
+        if reset_cursor:
+            self.source_text.mark_set("insert", "1.0")
+        if not needle:
+            self.editor_find_status_var.set("")
+            return 0
+
+        count = tk.IntVar()
+        pos = "1.0"
+        hits = 0
+        while True:
+            idx = self.source_text.search(needle, pos, stopindex=tk.END, nocase=True, count=count)
+            if not idx:
+                break
+            if count.get() <= 0:
+                break
+            end = f"{idx}+{count.get()}c"
+            self.source_text.tag_add("find_match", idx, end)
+            hits += 1
+            pos = end
+        self.editor_find_status_var.set(f"{hits} matches" if hits else "No match")
+        return hits
+
+    def _editor_find_step(self, backwards : bool):
+        needle = self.editor_find_var.get()
+        if not needle:
+            self.editor_find_status_var.set("Empty query")
+            return "break"
+
+        self._refresh_editor_find_marks(reset_cursor=False)
+        count = tk.IntVar()
+        insert_idx = self.source_text.index("insert")
+        if backwards:
+            idx = self.source_text.search(
+                needle, insert_idx, stopindex="1.0", backwards=True, nocase=True, count=count
+            )
+            if not idx:
+                idx = self.source_text.search(
+                    needle, tk.END, stopindex="1.0", backwards=True, nocase=True, count=count
+                )
+        else:
+            idx = self.source_text.search(needle, insert_idx, stopindex=tk.END, nocase=True, count=count)
+            if not idx:
+                idx = self.source_text.search(needle, "1.0", stopindex=tk.END, nocase=True, count=count)
+        if not idx or count.get() <= 0:
+            self.editor_find_status_var.set("No match")
+            return "break"
+
+        end = f"{idx}+{count.get()}c"
+        self.source_text.tag_remove("find_current", "1.0", tk.END)
+        self.source_text.tag_add("find_current", idx, end)
+        self.source_text.mark_set("insert", end if not backwards else idx)
+        self.source_text.see(idx)
+        self.editor_find_status_var.set(f"Match at {idx}")
+        return "break"
+
+    def _editor_find_next(self):
+        return self._editor_find_step(False)
+
+    def _editor_find_prev(self):
+        return self._editor_find_step(True)
+
+    def _on_editor_find_next(self, _event = None):
+        return self._editor_find_next()
+
+    def _on_editor_find_prev(self, _event = None):
+        return self._editor_find_prev()
+
+    def _on_editor_find_changed(self, _event = None):
+        self._refresh_editor_find_marks(reset_cursor=True)
 
     def open_class(self, dalvik_class : str):
         if dalvik_class is None or self.store is None:
