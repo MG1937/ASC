@@ -47,6 +47,8 @@ class SearchDialog:
         self.class_name = class_name
         self.fuzzy_class = fuzzy_class
         self.rows = []
+        self.all_rows = []
+        self.searching = True
 
         self.win = tk.Toplevel(app.root)
         self.win.title("Search")
@@ -55,6 +57,7 @@ class SearchDialog:
 
         self.status_var = tk.StringVar(value="Searching...")
         self.progress_var = tk.IntVar(value=0)
+        self.filter_var = tk.StringVar(value="")
 
         self._build_ui()
 
@@ -65,10 +68,17 @@ class SearchDialog:
         top = ttk.Frame(self.win, padding=8)
         top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(0, weight=1)
+        top.columnconfigure(1, weight=0)
+        top.columnconfigure(2, weight=1)
 
         ttk.Label(top, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
+        ttk.Label(top, text="Filter").grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self.filter_entry = ttk.Entry(top, textvariable=self.filter_var)
+        self.filter_entry.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        self.filter_entry.bind("<KeyRelease>", self._on_filter_changed)
+        self.filter_entry.config(state=tk.DISABLED)
         self.progress = ttk.Progressbar(top, mode="determinate", variable=self.progress_var, maximum=100)
-        self.progress.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.progress.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         body = ttk.Frame(self.win, padding=(8, 0, 8, 8))
         body.grid(row=1, column=0, sticky="nsew")
@@ -105,6 +115,8 @@ class SearchDialog:
     def finish(self, payload):
         if not self.rows and payload["results"]:
             self.append_results(payload["results"])
+        self.searching = False
+        self.filter_entry.config(state=tk.NORMAL)
         msg = f"Done. hits={payload['total_hits']} workers={payload['workers']} backend={payload['backend']}"
         # if payload["truncated"]:
             # msg += f" showing first {len(payload['results'])}"
@@ -112,6 +124,30 @@ class SearchDialog:
         self.progress_var.set(100)
 
     def append_results(self, rows):
+        if not rows:
+            return
+        self.all_rows.extend(rows)
+        if self.searching:
+            self._append_visible_rows(rows)
+            return
+        keyword = self.filter_var.get().strip().lower()
+        if keyword:
+            rows = [row for row in rows if self._row_matches_filter(row, keyword)]
+        self._append_visible_rows(rows)
+
+    def fail(self, message : str):
+        self.searching = False
+        self.filter_entry.config(state=tk.NORMAL)
+        self.status_var.set(message)
+
+    def _open_selected(self, _event = None):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        row = self.rows[int(selection[0])]
+        self.app.open_class(row["class_name"])
+
+    def _append_visible_rows(self, rows):
         if not rows:
             return
         start_idx = len(self.rows)
@@ -125,15 +161,31 @@ class SearchDialog:
                 values=(row["dex_name"], row["class_display"], method_name, row["matched_text"]),
             )
 
-    def fail(self, message : str):
-        self.status_var.set(message)
+    def _row_matches_filter(self, row, keyword : str):
+        if not keyword:
+            return True
+        return (
+            keyword in row["dex_name"].lower()
+            or keyword in row["class_display"].lower()
+            or keyword in row["method_text"].lower()
+            or keyword in row["matched_text"].lower()
+        )
 
-    def _open_selected(self, _event = None):
-        selection = self.tree.selection()
-        if not selection:
+    def _rebuild_filtered_rows(self):
+        if self.searching:
             return
-        row = self.rows[int(selection[0])]
-        self.app.open_class(row["class_name"])
+        keyword = self.filter_var.get().strip().lower()
+        self.tree.delete(*self.tree.get_children())
+        self.rows = []
+        if not keyword:
+            self._append_visible_rows(self.all_rows)
+            return
+        self._append_visible_rows([row for row in self.all_rows if self._row_matches_filter(row, keyword)])
+
+    def _on_filter_changed(self, _event = None):
+        if self.searching:
+            return
+        self._rebuild_filtered_rows()
 
 
 class AscGuiApp:
