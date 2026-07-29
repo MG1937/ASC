@@ -65,7 +65,7 @@ def write_sleb128(value):
 def read_uleb128_len(data, pos):
     if data[pos] < 128:
         return 1
-    if data[pos+1] < 128:
+    elif data[pos+1] < 128:
         return 2
     elif data[pos+2] < 128:
         return 3

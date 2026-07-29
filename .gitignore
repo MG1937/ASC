@@ -3,3 +3,4 @@ __pycache__/
 *.swp
 *.dex
 testcase.txt
+dump.txt
