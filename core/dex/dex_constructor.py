@@ -115,17 +115,17 @@ class DexHollower:
                 # https://source.android.com/docs/core/runtime/dex-format?hl=zh-cn#type-id-item
                 aligned_val = (val + 3) & ~3
                 code_item_head = data[aligned_val : aligned_val + 16]
-                debug_val = _STRUCT_I.unpack_from(code_item_head, 8)[0] # int.from_bytes(code_item_head[8:12], 'little')
+                debug_val = _STRUCT_H.unpack_from(code_item_head, 8)[0] # int.from_bytes(code_item_head[8:12], 'little')
                 tries_size = _STRUCT_H.unpack_from(code_item_head, 6)[0] # int.from_bytes(code_item_head[6:8], 'little')
                 try_item_bytes = None
                 encoded_catch_handler_list = None
                 if tries_size != 0: # try catch bugfix 20260730
-                    insns_size = _STRUCT_I.unpack_from(code_item_head, 12)[0] # int.from_bytes(code_item_head[12:16], 'little')
+                    insns_size = _STRUCT_H.unpack_from(code_item_head, 12)[0] # int.from_bytes(code_item_head[12:16], 'little')
                     insns_end = aligned_val + 16 + insns_size * 2
                     try_off = (insns_end + 3) & ~3 # 4 bytes aligned
                     try_off_end = try_off + tries_size * 8
                     try_item_bytes = data[try_off : try_off_end]
-                    encoded_catch_handler_list, p = self._hollow_encoded_catch_handler_list(data, try_off_end)
+                    encoded_catch_handler_list = self._hollow_encoded_catch_handler_list(data, try_off_end)
                 self.code_item_hlws[last_idx] = (code_item_head, try_item_bytes, tries_size)
                 self.code_item_metadata_hlws[last_idx] = (debug_val, encoded_catch_handler_list)                
 
@@ -149,12 +149,12 @@ class DexHollower:
                 try_item_bytes = None
                 encoded_catch_handler_list = None
                 if tries_size != 0:
-                    insns_size = _STRUCT_I.unpack_from(code_item_head, 12)[0]
+                    insns_size = _STRUCT_H.unpack_from(code_item_head, 12)[0]
                     insns_end = aligned_val + 16 + insns_size * 2
                     try_off = (insns_end + 3) & ~3 # 4 bytes aligned
                     try_off_end = try_off + tries_size * 8
                     try_item_bytes = data[try_off : try_off_end]
-                    encoded_catch_handler_list, p = self._hollow_encoded_catch_handler_list(data, try_off_end)
+                    encoded_catch_handler_list = self._hollow_encoded_catch_handler_list(data, try_off_end)
                 self.code_item_hlws[last_idx] = (code_item_head, try_item_bytes, tries_size)
                 self.code_item_metadata_hlws[last_idx] = (debug_val, encoded_catch_handler_list)                
         # self.clz_data_item_bytes = data[off : p]
@@ -185,8 +185,7 @@ class DexHollower:
                 encoded_catch_handler.append(catch_all_addr)
                 off += c
             encoded_catch_handler_list.append(encoded_catch_handler)
-        return encoded_catch_handler_list, off
-            
+        return encoded_catch_handler_list
 
     def hollow(self):
         if self.debug:
