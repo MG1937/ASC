@@ -87,6 +87,13 @@ class DexManager:
         # 4. Build the new DEX
         builder = DexBuilder(indexmapper, dexhlw, modified_bytecodes, debug=self.debug)
         new_dex_bytes = builder.build()
+        
+        try:
+            with open("output.dex", "wb") as f:
+                f.write(new_dex_bytes)
+        except Exception as e:
+            print(f"[ERROR] Failed to write output.dex: {e}")
+
         t_build_end = time.perf_counter()
 
         if self.debug:

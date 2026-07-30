@@ -4,3 +4,6 @@ __pycache__/
 *.dex
 testcase.txt
 dump.txt
+*.db
+*.db-shm
+*.db-wal
