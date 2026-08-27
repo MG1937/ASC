@@ -115,7 +115,8 @@ class DexHollower:
                 # https://source.android.com/docs/core/runtime/dex-format?hl=zh-cn#type-id-item
                 aligned_val = (val + 3) & ~3
                 code_item_head = data[aligned_val : aligned_val + 16]
-                debug_val = _STRUCT_H.unpack_from(code_item_head, 8)[0] # int.from_bytes(code_item_head[8:12], 'little')
+                # 20260827 bugfix for misuse of 2 bytes unpacker, debug_info_off should be 4 bytes..
+                debug_val = _STRUCT_I.unpack_from(code_item_head, 8)[0] # int.from_bytes(code_item_head[8:12], 'little')
                 tries_size = _STRUCT_H.unpack_from(code_item_head, 6)[0] # int.from_bytes(code_item_head[6:8], 'little')
                 try_item_bytes = None
                 encoded_catch_handler_list = None
