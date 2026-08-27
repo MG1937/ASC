@@ -2,10 +2,15 @@
 # Reconstruct DEX bytes, fill necessary fields
 
 import array
-from utils.leb128 import read_uleb128_fast
+import struct
+
+from utils.leb128 import read_uleb128_fast, read_sleb128
 from utils.leb128 import read_uleb128_len
 from utils.dex_parser import parse_encoded_array, parse_debug_info
 from utils.tinydex import DEX
+
+_STRUCT_I = struct.Struct('<I')
+_STRUCT_H = struct.Struct('<H')
 
 class DexHollower:
     # Extract All bytes of specfic item 
@@ -31,14 +36,20 @@ class DexHollower:
 
         self.anno_dir_hlw_types = {} # {relative_offset:idx, ...}
 
+        # hollow clz data wont help speed up build dex, just deprecated it 20260730
         self.clz_data_item_hlws = [] # [(relative_offset,HLW_TYPE,value,leb128len), ...]
         self.clz_data_item_bytes = None
-        self.code_item_hlws = [] # [(code_item_bytes, debug_off_pos, debug_off_value, method_idx), ...]
+
+        # adjust for builder
+        self.code_item_hlws = {} # {method_idx: (code_item_bytes, try_item_bytes, tries_size)}
+        self.code_item_metadata_hlws = {} # {method_idx: (debug_off_pos, encoded_catch_handler_list)}
+        # self.code_item_hlws = [] # [(code_item_bytes, debug_off_pos, debug_off_value, method_idx), ...]
         
         self.static_values_elements = None
         self.debug_info_items = {} # { method_idx: debug_info_dict }
         
         # New generic hollow lists for parsing static values and debug info
+        # LLM added it for static value parser, but I dont think we will need it hhhh 20260729
         self.hlw_strs = set()
         self.hlw_types = set()
         self.hlw_fields = set()
@@ -59,7 +70,7 @@ class DexHollower:
         if ifs_off == 0:
             return 0
         # ifs size
-        ifs_size = int.from_bytes(self._raw_cache[ifs_off : ifs_off + 4], 'little')
+        ifs_size = _STRUCT_I.unpack_from(self._raw_cache, ifs_off)[0] # int.from_bytes(self._raw_cache[ifs_off : ifs_off + 4], 'little')
         self.ifs_list_hlw_types.append(ifs_size)
         
         ifs_bytes = self._raw_cache[ifs_off + 4 : ifs_off + 4 + ifs_size * 2]
@@ -68,7 +79,7 @@ class DexHollower:
         self.ifs_list_hlw_types.extend(arr)
         return ifs_size
 
-    # This method partically gen By LLM, too complex, I dont want to write it
+    # LLM write too much hollow redundant logic, I rewrited it 20260730
     def _hollow_class_data_item_bytes(self, off : int):
         if off == 0: return 0
         data = self._raw_cache
@@ -80,22 +91,9 @@ class DexHollower:
         d_m_cnt, c = read_uleb128_fast(data, p); p += c
         v_m_cnt, c = read_uleb128_fast(data, p); p += c
 
-        # Static Fields
-        last_idx = 0
-        for _ in range(s_f_cnt):
-            diff, c = read_uleb128_fast(data, p)
-            last_idx += diff
-            self.clz_data_item_hlws.append((p - off, 'F_IDX_D', last_idx, c))
-            p += c
+        # Skip Fields
+        for _ in range(s_f_cnt + i_f_cnt):
             p += read_uleb128_len(data, p)
-
-        # Instance Fields
-        last_idx = 0
-        for _ in range(i_f_cnt):
-            diff, c = read_uleb128_fast(data, p)
-            last_idx += diff
-            self.clz_data_item_hlws.append((p - off, 'F_IDX_D', last_idx, c))
-            p += c
             p += read_uleb128_len(data, p)
 
         # Direct Methods
@@ -103,13 +101,12 @@ class DexHollower:
         for _ in range(d_m_cnt):
             diff, c = read_uleb128_fast(data, p)
             last_idx += diff
-            self.clz_data_item_hlws.append((p - off, 'M_IDX_D', last_idx, c))
             p += c
             p += read_uleb128_len(data, p) # skip acc
             
             # code_off
             val, c = read_uleb128_fast(data, p)
-            self.clz_data_item_hlws.append((p - off, 'M_CODE_O', val, c))
+            p += c
             
             if val > 0:
                 # Let's align code_off to 4 bytes because Dalvik requires code_item to be 4-byte aligned
@@ -118,35 +115,87 @@ class DexHollower:
                 # https://source.android.com/docs/core/runtime/dex-format?hl=zh-cn#type-id-item
                 aligned_val = (val + 3) & ~3
                 code_item_head = data[aligned_val : aligned_val + 16]
-                debug_val = int.from_bytes(code_item_head[8:12], 'little')
-                self.code_item_hlws.append((code_item_head, 8, debug_val, last_idx))
-            p += c
+                debug_val = _STRUCT_H.unpack_from(code_item_head, 8)[0] # int.from_bytes(code_item_head[8:12], 'little')
+                tries_size = _STRUCT_H.unpack_from(code_item_head, 6)[0] # int.from_bytes(code_item_head[6:8], 'little')
+                try_item_bytes = None
+                encoded_catch_handler_list = None
+                if tries_size != 0: # try catch bugfix 20260730
+                    insns_size = _STRUCT_H.unpack_from(code_item_head, 12)[0] # int.from_bytes(code_item_head[12:16], 'little')
+                    insns_end = aligned_val + 16 + insns_size * 2
+                    try_off = (insns_end + 3) & ~3 # 4 bytes aligned
+                    try_off_end = try_off + tries_size * 8
+                    try_item_bytes = data[try_off : try_off_end]
+                    encoded_catch_handler_list = self._hollow_encoded_catch_handler_list(data, try_off_end)
+                self.code_item_hlws[last_idx] = (code_item_head, try_item_bytes, tries_size)
+                self.code_item_metadata_hlws[last_idx] = (debug_val, encoded_catch_handler_list)                
 
         # Virtual Methods
         last_idx = 0
         for _ in range(v_m_cnt):
             diff, c = read_uleb128_fast(data, p)
             last_idx += diff
-            self.clz_data_item_hlws.append((p - off, 'M_IDX_D', last_idx, c))
             p += c
-            p += read_uleb128_len(data, p)
+            p += read_uleb128_len(data, p) # skip acc
             
+            # code_off
             val, c = read_uleb128_fast(data, p)
-            self.clz_data_item_hlws.append((p - off, 'M_CODE_O', val, c))
+            p += c
             
             if val > 0:
                 aligned_val = (val + 3) & ~3
                 code_item_head = data[aligned_val : aligned_val + 16]
-                debug_val = int.from_bytes(code_item_head[8:12], 'little')
-                self.code_item_hlws.append((code_item_head, 8, debug_val, last_idx))
-            p += c
+                debug_val = _STRUCT_I.unpack_from(code_item_head, 8)[0]
+                tries_size = _STRUCT_H.unpack_from(code_item_head, 6)[0]
+                try_item_bytes = None
+                encoded_catch_handler_list = None
+                if tries_size != 0:
+                    insns_size = _STRUCT_H.unpack_from(code_item_head, 12)[0]
+                    insns_end = aligned_val + 16 + insns_size * 2
+                    try_off = (insns_end + 3) & ~3 # 4 bytes aligned
+                    try_off_end = try_off + tries_size * 8
+                    try_item_bytes = data[try_off : try_off_end]
+                    encoded_catch_handler_list = self._hollow_encoded_catch_handler_list(data, try_off_end)
+                self.code_item_hlws[last_idx] = (code_item_head, try_item_bytes, tries_size)
+                self.code_item_metadata_hlws[last_idx] = (debug_val, encoded_catch_handler_list)                
+        # self.clz_data_item_bytes = data[off : p]
 
-        self.clz_data_item_bytes = data[off : p]
+    # I dont handle try item and catch handler, so decompiler pesudo is not complete
+    # change hollow flow to fix try catch issue 20260730
+    def _hollow_encoded_catch_handler_list(self, data, off):
+        # encoded_catch_handler_list struct [handler_off, size, encoded_catch_handler]
+        base_off = off
+        size, c = read_uleb128_fast(data, off)
+        encoded_catch_handler_list = [size]
+        off += c
+        for _ in range(size):
+            encoded_catch_handler = []
+            encoded_catch_handler.append(off - base_off)
+            h_size, c = read_sleb128(data, off)
+            encoded_catch_handler.append(h_size)
+            off += c
+            for _ in range(abs(h_size)):
+                type_idx, c = read_uleb128_fast(data, off)
+                encoded_catch_handler.append(type_idx)
+                off += c
+                addr, c = read_uleb128_fast(data, off)
+                encoded_catch_handler.append(addr)
+                off += c
+            if h_size <= 0:
+                catch_all_addr, c = read_uleb128_fast(data, off)
+                encoded_catch_handler.append(catch_all_addr)
+                off += c
+            encoded_catch_handler_list.append(encoded_catch_handler)
+        return encoded_catch_handler_list
 
     def hollow(self):
         if self.debug:
             import time
             t_start = time.perf_counter()
+
+        # WAIT A FUKING MINITE, I should write must of the parse logic by myself
+        # I tell LLM to optimize debug info parser, LLM just rewrite whole parse logic and move it to dex_parser.py
+        # Almost half of my handwritten logic gone, 
+        # today when I try to fix try_item issue, I found my code is gone! FUCK! 20260729
         
         # === CLASS_DEF_ITEM ===
         # https://source.android.com/docs/core/runtime/dex-format#class-def-item
@@ -172,13 +221,14 @@ class DexHollower:
         # === STATIC_VALUES ===
         static_values_off = clz_def_data[7]
         if static_values_off != 0:
+            # which may never be executed, I tried many way to compile a java file contains static fields to dex, never meet static_value_off > 0
+            # but LLM still generate this parse, IDK why.. 20260729
             self.static_values_elements = parse_encoded_array(self._raw_cache, static_values_off, self.hlw_strs, self.hlw_types, self.hlw_fields, self.hlw_methods)
         if self.debug: t_static = time.perf_counter()
             
         # === DEBUG_INFO ===
-        for code_item in self.code_item_hlws:
-            debug_info_off = code_item[2]
-            method_idx = code_item[3]
+        for method_idx in self.code_item_hlws:
+            debug_info_off = self.code_item_metadata_hlws[method_idx][0]
             if debug_info_off != 0:
                 self.debug_info_items[method_idx] = parse_debug_info(self._raw_cache, debug_info_off, self.hlw_strs, self.hlw_types)
         if self.debug:

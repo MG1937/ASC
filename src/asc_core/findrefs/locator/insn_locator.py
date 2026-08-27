@@ -1,6 +1,10 @@
 from findrefs.locator.base_locator import BaseLocator
 from utils.leb128 import read_uleb128_fast, read_uleb128_len
 from collections import defaultdict
+
+import models.dvm_opcode
+
+import re
 import struct
 import time
 
@@ -23,6 +27,7 @@ _STRUCT_H = struct.Struct('<H')
 
 # cover insn offset to method idx
 class InsnLocator(BaseLocator):
+    INSN_VERIFY = None
     def __init__(self, dex):
         super().__init__(dex)
         self.parsed = False
@@ -30,9 +35,26 @@ class InsnLocator(BaseLocator):
         self.insn_maps = {} # {insn_off_bucket: midx, insn_off_bucket : [midx, midx2...]}
         self.code_item_start = 0 # fuzzy offset around 16 bytes
         self.code_item_end = 0 # fuzzy too
+        
+        # for insn verify... bugfix for insn mismatch 20260728
+        self.method_bounds = {} # {midx: insn_off_start}
+        self._build_insn_verify()
         # self.insn_offs = [] # for sort
         # self.method_map = defaultdict(list) # {insn_off : [midx, midx2...]}
         # self.insn_off_size = {} # {insn_off : insn_size}
+
+    def _build_insn_verify(self):
+        # build INSN VERIFY for insn mismatch issue
+        insns = {1:[], 2:[], 3:[], 4:[], 5:[]}
+        opcodes = models.dvm_opcode.opcodes
+        for opcode in opcodes:
+            insns[opcodes[opcode].oplen].append(opcode)
+        insns_re = []
+        for oplen in insns:
+            insns_re.append(b"[" + re.escape(bytes(insns[oplen])) + b"]" +
+                    b"." * (oplen * 2 - 1)) # -1 for exclude opcode itself
+        # utilzes c-regex cap for fast matching, rather than performing linear matching in py 
+        InsnLocator.INSN_VERIFY = re.compile(b"(?>(?:" + b"|".join(insns_re) + b")*)", re.DOTALL)
 
     def _encoded_method_parse(self, data : bytes, pos, midx):
         if pos == 0:
@@ -41,11 +63,14 @@ class InsnLocator(BaseLocator):
         insn_size = _STRUCT_I.unpack_from(data, pos + 12)[0]
         insn_off = pos + 16
         insn_maps = self.insn_maps
-        # need to declare why do this...
+        # need to declare why do this... checkout the diagram in file head
         insn_bucket_start = insn_off >> 4
         insn_bucket_end = (insn_off + insn_size * 2 - 1) >> 4
 
+        self.method_bounds[midx] = insn_off
+
         old = insn_maps.get(insn_bucket_start)
+        # R8 insn deduplicate machenism, different method may refer to same insn body
         if old:
             if isinstance(old, int):
                 midx = [midx, old]
@@ -67,11 +92,7 @@ class InsnLocator(BaseLocator):
         direct_methods_size, c = read_uleb128_fast(data, pos); pos += c
         virtual_methods_size, c = read_uleb128_fast(data, pos); pos += c
         
-        for _ in range(static_fields_size):
-            pos += read_uleb128_len(data, pos)
-            pos += read_uleb128_len(data, pos)
-            
-        for _ in range(instance_fields_size):
+        for _ in range(static_fields_size + instance_fields_size):
             pos += read_uleb128_len(data, pos)
             pos += read_uleb128_len(data, pos)
             
@@ -146,9 +167,11 @@ class InsnLocator(BaseLocator):
             return None
         ret_table = []
         insn_maps = self.insn_maps
+
+        buf = self.buf
+        method_bounds = self.method_bounds.copy()
         for off in offsets:
             midx = insn_maps.get(off >> 4)
-            ret_table.append(midx)
             """
             if not midx: # bugfix: avoid None value
                 continue
@@ -157,7 +180,19 @@ class InsnLocator(BaseLocator):
             else:
                 ret_table.add(midx)
             """
+            # when code_scaner match insn, the insn offset is keep growing, so input offset must in order
+            # which means there is no possible to backtracking inside one method, so we can update method
+            # start insn offset once we fullmatch an insn, avoid re-fullmatch from start of method
+            # bugfix for insn mismatch issue 20260729
+            if isinstance(midx, int) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds[midx], off):
+                ret_table.append(midx)
+                method_bounds[midx] = off
+            elif isinstance(midx, list) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds[midx[0]], off):
+                ret_table.append(midx)
+                method_bounds[midx[0]] = off
+            else:
+                ret_table.append(None)
+            
             # dense table is fuzzy, insn range verify back to method verify stage! 20260617
         self._debug_log("locate", t_start, len(ret_table))
         return ret_table
-            

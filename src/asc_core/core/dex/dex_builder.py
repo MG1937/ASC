@@ -1,7 +1,7 @@
 import struct
 import array
 import time
-from utils.leb128 import write_uleb128
+from utils.leb128 import write_uleb128, write_sleb128
 from core.dex.dex_remapper import DexIndexMapper
 from core.dex.dex_constructor import DexHollower
 
@@ -49,14 +49,14 @@ class DexBuilder:
         # Proto type lists
         proto_param_offs = []
         # align to 4
-        while len(self.out) % 4 != 0: self.out.append(0)
+        while len(self.out) & 3 != 0: self.out.append(0)
         
         for proto in self.im.proto_restruct:
             params = proto[3:]
             if len(params) == 0:
                 proto_param_offs.append(0)
             else:
-                while len(self.out) % 4 != 0: self.out.append(0)
+                while len(self.out) & 3 != 0: self.out.append(0)
                 proto_param_offs.append(len(self.out))
                 self.out.extend(len(params).to_bytes(4, 'little'))
                 for p in params:
@@ -65,7 +65,7 @@ class DexBuilder:
         # Interface type list
         ifs_off = 0
         if len(self.hlw.ifs_list_hlw_types) > 0:
-            while len(self.out) % 4 != 0: self.out.append(0)
+            while len(self.out) & 3 != 0: self.out.append(0)
             ifs_off = len(self.out)
             ifs_size = self.hlw.ifs_list_hlw_types[0]
             self.out.extend(ifs_size.to_bytes(4, 'little'))
@@ -81,7 +81,7 @@ class DexBuilder:
         # Static Values
         static_values_off = 0
         if self.hlw.static_values_elements is not None:
-            while len(self.out) % 4 != 0: self.out.append(0)
+            while len(self.out) & 3 != 0: self.out.append(0)
             static_values_off = len(self.out)
             from utils.dex_parser import rebuild_encoded_array
             self.out.extend(rebuild_encoded_array(self.hlw.static_values_elements, self.im))
@@ -105,8 +105,9 @@ class DexBuilder:
                 self.out.extend(rebuild_debug_info(self.hlw.debug_info_items[method.index], self.im))
         
         # Then, write all code items
-        if not hasattr(self, '_code_item_hlws_dict'):
-            self._code_item_hlws_dict = {ci[3]: ci[0] for ci in self.hlw.code_item_hlws if len(ci) > 3}
+        self._code_item_hlws_dict = self.hlw.code_item_hlws
+        # if not hasattr(self, '_code_item_hlws_dict'):
+        #     self._code_item_hlws_dict = {ci[3]: ci[0] for ci in self.hlw.code_item_hlws if len(ci) > 3}
             
         for method in sorted(self.im.methods_obj, key=lambda m: self.im.method_restruct_idx.get(m.index, 0)):
             if not method.code_offset:
@@ -115,10 +116,14 @@ class DexBuilder:
             debug_info_off = method_to_debug_off.get(method.index, 0)
                 
             # Let's align code_item to 4 bytes FIRST
-            while len(self.out) % 4 != 0: self.out.append(0)
+            while len(self.out) & 3 != 0: self.out.append(0)
             code_item_offs[method.index] = len(self.out)
 
-            orig_header = self._code_item_hlws_dict.get(method.index, None)
+            # code item bytes
+            code_item_info = self._code_item_hlws_dict.get(method.index, (None, None, 0))
+            orig_header = code_item_info[0]
+            try_item_bytes = code_item_info[1]
+            tries_size = code_item_info[2]
             
             if orig_header is None:
                 # Fallback to reading from raw cache if not found
@@ -131,19 +136,58 @@ class DexBuilder:
             new_header = bytearray(16)
             
             if len(orig_header) == 16:
+                # IDK why LLM gen this... I reviewed it and remove
+                """
                 regs = int.from_bytes(orig_header[0:2], 'little')
                 ins = int.from_bytes(orig_header[2:4], 'little')
                 outs = int.from_bytes(orig_header[4:6], 'little')
-                
                 new_header[0:2] = regs.to_bytes(2, 'little')
                 new_header[2:4] = ins.to_bytes(2, 'little')
                 new_header[4:6] = outs.to_bytes(2, 'little')
-                new_header[6:8] = b'\x00\x00' # tries_size = 0
+                new_header[6:8] = tries_size.to_bytes(2, 'little')
                 new_header[8:12] = debug_info_off.to_bytes(4, 'little')
                 new_header[12:16] = insns_size.to_bytes(4, 'little')
+                """
+                _, catch_handler_list = self.hlw.code_item_metadata_hlws.get(method.index, (0, None))
                 
-                self.out.extend(new_header)
+                self.out.extend(orig_header)
                 self.out.extend(bc)
+                
+                if tries_size > 0:
+                    if insns_size & 1:
+                        self.out.extend(b'\x00\x00')
+                    
+                    new_handlers_bytes = bytearray()
+                    old_to_new_offset = {}
+                    new_handlers_bytes.extend(write_uleb128(catch_handler_list[0]))
+                    for i in range(1, len(catch_handler_list)):
+                        handler = catch_handler_list[i]
+                        old_off = handler[0]
+                        h_size = handler[1]
+                        
+                        # bugfix, need to update catch handler off,
+                        # or old handler off may not fit new list due to length change by uleb128 rewrite 20260730
+                        old_to_new_offset[old_off] = len(new_handlers_bytes)
+                        
+                        new_handlers_bytes.extend(write_sleb128(h_size))
+                        pos = 2
+                        for _ in range(abs(h_size)):
+                            new_handlers_bytes.extend(write_uleb128(handler[pos])) # type_idx
+                            new_handlers_bytes.extend(write_uleb128(handler[pos+1])) # addr
+                            pos += 2
+                        if h_size <= 0:
+                            new_handlers_bytes.extend(write_uleb128(handler[pos])) # catch_all_addr
+                            
+                    new_try_item_bytes = bytearray()
+                    for j in range(tries_size):
+                        old_handler_off = int.from_bytes(try_item_bytes[j*8+6 : j*8+8], 'little')
+                        new_handler_off = old_to_new_offset.get(old_handler_off, old_handler_off)
+                        
+                        new_try_item_bytes.extend(try_item_bytes[j*8: j*8+6])
+                        new_try_item_bytes.extend(new_handler_off.to_bytes(2, 'little'))
+                        
+                    self.out.extend(new_try_item_bytes)
+                    self.out.extend(new_handlers_bytes)
 
         if self.debug: t_code_items = time.perf_counter()
 
@@ -190,7 +234,7 @@ class DexBuilder:
 
         # Now write IDs
         # Align 4
-        while len(self.out) % 4 != 0: self.out.append(0)
+        while len(self.out) & 3 != 0: self.out.append(0)
         
         # String IDs
         string_ids_off = len(self.out)
@@ -243,7 +287,7 @@ class DexBuilder:
         if self.debug: t_ids = time.perf_counter()
 
         # Map List
-        while len(self.out) % 4 != 0: self.out.append(0)
+        while len(self.out) & 3 != 0: self.out.append(0)
         map_list_off = len(self.out)
         
         # Map items

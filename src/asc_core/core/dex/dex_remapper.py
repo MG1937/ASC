@@ -379,3 +379,18 @@ class DexIndexMapper:
                         new_mth = [mth_cls_name_typeidx, new_proto_idx, mth_name_stridx]
                         self._add_method_restruct(new_mth, method.index)
 
+        # === CODE ITEM TRY_ITEM CATCH HANDLER IDX ===
+        for method_idx, metadata in self.hollower.code_item_metadata_hlws.items():
+            debug_val, catch_handler_list = metadata
+            if catch_handler_list:
+                # catch_handler_list: [size, [old_off, h_size, type_idx, addr, ...], ...]
+                for i in range(1, len(catch_handler_list)):
+                    handler = catch_handler_list[i]
+                    h_size = handler[1]
+                    pos = 2
+                    for _ in range(abs(h_size)):
+                        old_type_idx = handler[pos]
+                        new_type_idx = self._append_origin_type(old_type_idx)
+                        handler[pos] = new_type_idx
+                        pos += 2
+
