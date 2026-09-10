@@ -42,8 +42,10 @@ python tests/run_tests.py --require-decompiler --suite integration
 python tests/benchmark_compare.py --baseline /path/to/base-checkout --samples 31
 ```
 
-CI checks out the PR's exact base SHA. Push/manual builds compare against
-`MG1937/ASC:dev-0.1.0`. A missing baseline fails the job. The same interpreter,
+CI checks out the PR's exact base SHA. Direct pushes to `dev-0.1.0` compare
+against the pre-push SHA, so the candidate cannot become its own baseline.
+Other push/manual builds compare against `MG1937/ASC:dev-0.1.0`. A missing
+baseline fails the job. The same interpreter,
 runner, DEX, original scripts and query arguments exercise both revisions.
 
 The comparison covers 20 module timings from `test_findrefs.py`, core decompilation
