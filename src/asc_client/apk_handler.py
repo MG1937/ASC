@@ -7,6 +7,8 @@ import time
 import zlib
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, FIRST_COMPLETED, wait
 
+from src.asc_client.dex_container import iter_logical_dex_buffers
+
 
 _U16 = struct.Struct("<H")
 _U32 = struct.Struct("<I")
@@ -262,7 +264,10 @@ def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggreg
     t0 = time.perf_counter()
     data = _inflate_dex(mm, entry)
     t1 = time.perf_counter()
-    lines = AscHandler(False).findrefs(entry[0], data, find_type, find, aggregate=aggregate)
+    lines = []
+    handler = AscHandler(False)
+    for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
+        lines.extend(handler.findrefs(dex_name, dex_buf, find_type, find, aggregate=aggregate))
     t2 = time.perf_counter()
     return (
         entry[0],
@@ -287,7 +292,17 @@ def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : t
     if stop_event.is_set():
         return False, None
 
-    hit = _dex_defines_class(data, target_bytes)
+    hit = False
+    hit_name = None
+    hit_data = None
+    for dex_name, dex_buf in iter_logical_dex_buffers(name, data):
+        if stop_event.is_set():
+            return False, None, None
+        if _dex_defines_class(dex_buf, target_bytes):
+            hit = True
+            hit_name = dex_name
+            hit_data = dex_buf
+            break
     t2 = time.perf_counter()
     if hit:
         stop_event.set()
@@ -295,22 +310,7 @@ def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : t
         f"[APK] [T{tid:04x}] '{name}' inflate={(t1 - t0) * 1000000:.2f} us "
         f"lookup={(t2 - t1) * 1000000:.2f} us hit={hit}"
     )
-    return hit, data
-
-
-def _inflate_and_process(mm : mmap.mmap, entry, stop_event : threading.Event, processor, log):
-    tid = threading.get_ident() & 0xFFFF
-    name = entry[0]
-    t0 = time.perf_counter()
-    data = _inflate_dex(mm, entry, stop_event)
-    t1 = time.perf_counter()
-    ret = processor(name, data)
-    t2 = time.perf_counter()
-    log(
-        f"[APK] [T{tid:04x}] '{name}' inflate={(t1 - t0) * 1000000:.2f} us "
-        f"process={(t2 - t1) * 1000000:.2f} us"
-    )
-    return name, ret
+    return hit, hit_name, hit_data
 
 
 class ApkHandler:
@@ -362,9 +362,9 @@ class ApkHandler:
                     done, _pending = wait(list(inflight.keys()), return_when=FIRST_COMPLETED)
                     for fut in done:
                         entry = inflight.pop(fut)
-                        ok, data = fut.result()
+                        ok, dex_name, data = fut.result()
                         if ok:
-                            hit_name = entry[0]
+                            hit_name = dex_name
                             hit_data = data
                             stop_event.set()
                             break
@@ -380,40 +380,6 @@ class ApkHandler:
             if hit_name is None:
                 return None
             return hit_name, hit_data
-        finally:
-            mm.close()
-            fp.close()
-
-    def for_each_dex(self, processor):
-        t_start = time.perf_counter()
-        fp, mm = self._open_apk()
-        try:
-            entries = _parse_cd_dex_entries(mm)
-            entries.sort(key=lambda x: x[2])
-            stop_event = threading.Event()
-            cap = min(len(entries), max(1, self.max_workers))
-            with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-                futures = {}
-                idx = 0
-                while idx < len(entries) or futures:
-                    while idx < len(entries) and len(futures) < cap:
-                        entry = entries[idx]
-                        idx += 1
-                        fut = ex.submit(_inflate_and_process, mm, entry, stop_event, processor, self._log)
-                        futures[fut] = entry[0]
-                    if not futures:
-                        break
-
-                    done, _pending = wait(list(futures.keys()), return_when=FIRST_COMPLETED)
-                    for fut in done:
-                        futures.pop(fut)
-                        yield fut.result()
-            if self.debug:
-                t_end = time.perf_counter()
-                self._log(
-                    f"[APK] for_each_dex total={(t_end - t_start) * 1000000:.2f} us "
-                    f"count={len(entries)} inflight={cap}"
-                )
         finally:
             mm.close()
             fp.close()

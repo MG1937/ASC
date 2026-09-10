@@ -95,6 +95,68 @@ def _fast_parse_class_info(raw_name):
         return package, name[:-1]
     return '', raw_name
 
+@functools.lru_cache(maxsize=4096)
+def _format_annotation_type(raw_name):
+    if raw_name.startswith('L') and raw_name.endswith(';'):
+        raw_name = raw_name[1:-1]
+    raw_name = raw_name.replace('/', '.')
+    return raw_name.rsplit('.', 1)[-1].replace('$', '.')
+
+def _format_annotation_value(value):
+    value_type = value.get_value_type()
+    raw_value = value.get_value()
+    if value_type == androguard_dex.VALUE_STRING:
+        return '"%s"' % str(raw_value).encode("unicode-escape").decode("ascii")
+    if value_type == androguard_dex.VALUE_TYPE:
+        return "%s.class" % _format_annotation_type(str(raw_value))
+    if value_type == androguard_dex.VALUE_ARRAY:
+        return "{%s}" % ", ".join(_format_annotation_value(v) for v in raw_value.get_values())
+    if value_type == androguard_dex.VALUE_ANNOTATION:
+        return _format_encoded_annotation(raw_value)
+    if value_type == androguard_dex.VALUE_BOOLEAN:
+        return "true" if raw_value else "false"
+    if value_type == androguard_dex.VALUE_NULL:
+        return "null"
+    return str(raw_value)
+
+def _format_encoded_annotation(annotation):
+    cm = annotation.CM
+    name = _format_annotation_type(cm.get_type(annotation.get_type_idx()))
+    elements = annotation.get_elements()
+    if not elements:
+        return "@%s" % name
+    parts = []
+    for element in elements:
+        element_name = cm.get_raw_string(element.get_name_idx())
+        parts.append("%s=%s" % (element_name, _format_annotation_value(element.get_value())))
+    return "@%s(%s)" % (name, ", ".join(parts))
+
+def _annotation_set_to_source(cm, annotations_off):
+    if annotations_off == 0:
+        return []
+    annotation_set = cm.get_annotation_set_item(annotations_off)
+    if annotation_set is None:
+        return []
+    ret = []
+    for off_item in annotation_set.get_annotation_off_item():
+        annotation_item = off_item.get_annotation_item()
+        if annotation_item is None:
+            continue
+        ret.append(_format_encoded_annotation(annotation_item.get_annotation()))
+    return ret
+
+def _build_method_annotation_map(dvclass):
+    directory = getattr(dvclass, "annotations_directory_item", None)
+    if directory is None:
+        return {}
+    ret = {}
+    cm = dvclass.CM
+    for method_annotation in directory.get_method_annotations():
+        annotations = _annotation_set_to_source(cm, method_annotation.get_annotations_off())
+        if annotations:
+            ret[method_annotation.get_method_idx()] = annotations
+    return ret
+
 # We Monkey Patch DvClass.__init__ to use our fast parser and avoid redundant allocations
 _orig_dvclass_init = decompile.DvClass.__init__
 def patched_dvclass_init(self, dvclass, vma):
@@ -117,8 +179,29 @@ def patched_dvclass_init(self, dvclass, vma):
     self.interfaces = dvclass.get_interfaces()
     self.superclass = dvclass.get_superclassname()
     self.thisclass = raw_name
+    self._asc_method_annotations = _build_method_annotation_map(dvclass)
 
 decompile.DvClass.__init__ = patched_dvclass_init
+
+_orig_dvclass_process_method = decompile.DvClass.process_method
+def patched_dvclass_process_method(self, num: int, doAST: bool = False) -> None:
+    _orig_dvclass_process_method(self, num, doAST=doAST)
+    method = self.methods[num]
+    if isinstance(method, decompile.DvMethod):
+        method_idx = method.method.get_method_idx()
+        method._asc_annotations = self._asc_method_annotations.get(method_idx, [])
+
+decompile.DvClass.process_method = patched_dvclass_process_method
+
+_orig_dvmethod_get_source = decompile.DvMethod.get_source
+def patched_dvmethod_get_source(self) -> str:
+    source = _orig_dvmethod_get_source(self)
+    annotations = getattr(self, "_asc_annotations", None)
+    if not annotations or not source:
+        return source
+    return "".join("\n    %s" % annotation for annotation in annotations) + source
+
+decompile.DvMethod.get_source = patched_dvmethod_get_source
 # --- End of String/Type Optimizations ---
 
 # We also completely disable ALL androguard loggers via python's standard logging module

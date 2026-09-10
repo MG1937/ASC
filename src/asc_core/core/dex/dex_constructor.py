@@ -6,7 +6,7 @@ import struct
 
 from utils.leb128 import read_uleb128_fast, read_sleb128
 from utils.leb128 import read_uleb128_len
-from utils.dex_parser import parse_encoded_array, parse_debug_info
+from utils.dex_parser import parse_encoded_array, parse_debug_info, parse_annotation_item
 from utils.tinydex import DEX
 
 _STRUCT_I = struct.Struct('<I')
@@ -47,6 +47,10 @@ class DexHollower:
         
         self.static_values_elements = None
         self.debug_info_items = {} # { method_idx: debug_info_dict }
+        self.annotation_directory = None
+        self.annotation_sets = {} # { set_off: {"items": [annotation_off, ...]} }
+        self.annotation_items = {} # { annotation_off: parsed_annotation_item }
+        self.annotation_set_refs = {} # { ref_list_off: [annotation_set_off, ...] }
         
         # New generic hollow lists for parsing static values and debug info
         # LLM added it for static value parser, but I dont think we will need it hhhh 20260729
@@ -188,6 +192,83 @@ class DexHollower:
             encoded_catch_handler_list.append(encoded_catch_handler)
         return encoded_catch_handler_list
 
+    def _hollow_annotation_set_item(self, off : int):
+        if off == 0 or off in self.annotation_sets:
+            return
+        data = self._raw_cache
+        size = _STRUCT_I.unpack_from(data, off)[0]
+        items = []
+        p = off + 4
+        for _ in range(size):
+            annotation_off = _STRUCT_I.unpack_from(data, p)[0]
+            p += 4
+            items.append(annotation_off)
+            if annotation_off != 0 and annotation_off not in self.annotation_items:
+                self.annotation_items[annotation_off] = parse_annotation_item(
+                    data,
+                    annotation_off,
+                    self.hlw_strs,
+                    self.hlw_types,
+                    self.hlw_fields,
+                    self.hlw_methods,
+                )
+        self.annotation_sets[off] = {
+            'items': items,
+        }
+
+    def _hollow_annotation_set_ref_list(self, off : int):
+        if off == 0 or off in self.annotation_set_refs:
+            return
+        data = self._raw_cache
+        size = _STRUCT_I.unpack_from(data, off)[0]
+        refs = []
+        p = off + 4
+        for _ in range(size):
+            set_off = _STRUCT_I.unpack_from(data, p)[0]
+            p += 4
+            refs.append(set_off)
+            self._hollow_annotation_set_item(set_off)
+        self.annotation_set_refs[off] = refs
+
+    def _hollow_annotation_directory_item(self, off : int):
+        if off == 0:
+            return
+        data = self._raw_cache
+        class_annotations_off, fields_size, methods_size, parameters_size = struct.unpack_from('<4I', data, off)
+        self._hollow_annotation_set_item(class_annotations_off)
+
+        p = off + 16
+        field_annotations = []
+        for _ in range(fields_size):
+            field_idx, annotations_off = struct.unpack_from('<2I', data, p)
+            p += 8
+            field_annotations.append((field_idx, annotations_off))
+            self.hlw_fields.add(field_idx)
+            self._hollow_annotation_set_item(annotations_off)
+
+        method_annotations = []
+        for _ in range(methods_size):
+            method_idx, annotations_off = struct.unpack_from('<2I', data, p)
+            p += 8
+            method_annotations.append((method_idx, annotations_off))
+            self.hlw_methods.add(method_idx)
+            self._hollow_annotation_set_item(annotations_off)
+
+        parameter_annotations = []
+        for _ in range(parameters_size):
+            method_idx, annotations_off = struct.unpack_from('<2I', data, p)
+            p += 8
+            parameter_annotations.append((method_idx, annotations_off))
+            self.hlw_methods.add(method_idx)
+            self._hollow_annotation_set_ref_list(annotations_off)
+
+        self.annotation_directory = {
+            'class_annotations_off': class_annotations_off,
+            'field_annotations': field_annotations,
+            'method_annotations': method_annotations,
+            'parameter_annotations': parameter_annotations,
+        }
+
     def hollow(self):
         if self.debug:
             import time
@@ -210,9 +291,8 @@ class DexHollower:
         if self.debug: t_ifs = time.perf_counter()
 
         # === ANNOTATION ===
-        # ignore annotaion, it is TOO FUCKING COMPLEX!!!
-        # ignore it might be buggy or loss decompile precise
         annotations_off = clz_def_data[5]
+        self._hollow_annotation_directory_item(annotations_off)
 
         # === CLASS_DATA ===
         class_data_off = clz_def_data[6]

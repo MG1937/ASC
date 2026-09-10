@@ -9,11 +9,19 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 from src.asc_client.apk_handler import _findrefs_worker, _inflate_dex, _parse_cd_dex_entries
+from src.asc_client.dex_container import iter_logical_dex_buffers
+from src.asc_core.findrefs.findrefs_manager import FindRefManager
 from src.asc_core.utils.tinydex import DEX
 
 
 _MAX_UI_RESULTS = 5000
 _GUI_MP_LOCK = threading.Lock()
+_REF_SEARCH_TYPES = {
+    "string refs": "string",
+    "type refs": "type",
+    "method refs": "method",
+    "field refs": "field",
+}
 
 
 def _debug_log(enabled : bool, scope : str, msg : str):
@@ -74,6 +82,7 @@ def _normalize_class_query(name : str, fuzzy : bool):
 
 
 def build_find_query(find_type : str, value : str, class_name = None, fuzzy_class : bool = False):
+    find_type = _REF_SEARCH_TYPES.get(find_type, find_type)
     if find_type == "string":
         return "string", {"string": value}
     if find_type == "type":
@@ -101,6 +110,10 @@ def parse_result_line(line : str):
     }
 
 
+def is_member_search(find_type : str) -> bool:
+    return find_type in ("method", "field")
+
+
 class GuiDexStore:
     def __init__(self, apk_path : str, max_workers : int = 20, debug : bool = False, search_executor = None):
         self.apk_path = apk_path
@@ -114,6 +127,7 @@ class GuiDexStore:
         self.class_names = []
         self.package_children = {}
         self.package_classes = {}
+        self.findref_managers = {}
         self.source_cache = {}
         self._source_lock = threading.Lock()
 
@@ -138,30 +152,38 @@ class GuiDexStore:
 
             def load_entry(entry):
                 data = _inflate_dex(mm, entry)
-                dex = DEX.parse(memoryview(data), entry[0])
-                classes = []
-                for class_idx in range(len(dex.classes)):
-                    classes.append(dex.classes[class_idx].fullname)
-                return entry, data, classes
+                logical = []
+                for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
+                    dex = DEX.parse(memoryview(dex_buf), dex_name)
+                    classes = []
+                    for class_idx in range(len(dex.classes)):
+                        classes.append(dex.classes[class_idx].fullname)
+                    logical.append((dex_name, dex_buf, dex, classes))
+                return entry, logical
 
             done = 0
             class_count = 0
             with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
                 futures = [ex.submit(load_entry, entry) for entry in entries]
                 for fut in as_completed(futures):
-                    entry, data, classes = fut.result()
-                    dex_name = entry[0]
-                    self.dex_buffers[dex_name] = data
-                    for class_name in classes:
-                        self.class_to_dex.setdefault(class_name, dex_name)
+                    entry, logical = fut.result()
+                    for dex_name, dex_buf, dex, classes in logical:
+                        self.dex_buffers[dex_name] = dex_buf
+                        self.findref_managers[dex_name] = FindRefManager(dex, self.debug)
+                        for class_name in classes:
+                            self.class_to_dex.setdefault(class_name, dex_name)
+                        class_count += len(classes)
                     done += 1
-                    class_count += len(classes)
                     if progress_callback is not None:
-                        progress_callback(done, total, dex_name, class_count)
+                        progress_callback(done, total, entry[0], class_count)
 
             self.class_names = sorted(self.class_to_dex.keys())
             self._build_package_index()
-            _debug_log(self.debug, "runtime", f"load done dex={len(self.entries)} classes={len(self.class_names)}")
+            _debug_log(
+                self.debug,
+                "runtime",
+                f"load done dex={len(self.entries)} classes={len(self.class_names)}",
+            )
         finally:
             mm.close()
             fp.close()
@@ -250,6 +272,73 @@ class GuiDexStore:
         )
         return ret
 
+    def search_members(self, find_type : str, value : str, limit : int = _MAX_UI_RESULTS):
+        keyword = (value or "").strip()
+        dex_names = [entry[0] for entry in self.entries]
+
+        def search_dex(dex_name):
+            manager = self.findref_managers.get(dex_name)
+            if manager is None:
+                return 0, []
+            dex = manager.dex
+            dex_rows = []
+            if find_type == "method":
+                locator = manager._get_method_locator(True)
+                member_idxs = locator.locate({"class": None, "method": keyword})
+                for midx in sorted(member_idxs):
+                    method = dex.methods[midx]
+                    class_name = method.cls.fullname
+                    method_text = f"{class_name}->{method.name}"
+                    dex_rows.append({
+                        "dex_name": dex_name,
+                        "class_name": class_name,
+                        "class_display": dalvik_to_dot(class_name),
+                        "method_text": method_text,
+                        "matched_text": f"method=({method.name})",
+                        "line": method_text,
+                    })
+                return len(member_idxs), dex_rows
+
+            locator = manager._get_field_locator(True)
+            member_idxs = locator.locate({"class": None, "field": keyword})
+            for fidx in sorted(member_idxs):
+                field = dex.fields[fidx]
+                class_name = field.cls.fullname
+                method_text = f"{class_name}->{field.name}"
+                dex_rows.append({
+                    "dex_name": dex_name,
+                    "class_name": class_name,
+                    "class_display": dalvik_to_dot(class_name),
+                    "method_text": method_text,
+                    "matched_text": f"field=({field.name})",
+                    "line": method_text,
+                })
+            return len(member_idxs), dex_rows
+
+        rows = []
+        total_hits = 0
+        workers = self.get_effective_search_workers()
+        if len(dex_names) <= 1 or workers <= 1:
+            results = [search_dex(dex_name) for dex_name in dex_names]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [ex.submit(search_dex, dex_name) for dex_name in dex_names]
+                results = [fut.result() for fut in futures]
+
+        for hit_count, dex_rows in results:
+            total_hits += hit_count
+            if len(rows) < limit:
+                rows.extend(dex_rows[:limit - len(rows)])
+
+        return {
+            "find_type": find_type,
+            "query_value": value,
+            "results": rows,
+            "total_hits": total_hits,
+            "workers": workers,
+            "backend": "locator",
+        }
+
     def get_effective_search_workers(self, requested = None):
         cpu = os.cpu_count() or 4
         workers = requested if requested is not None else self.max_workers
@@ -333,6 +422,9 @@ class GuiDexStore:
         }
 
         cmd = [sys.executable, "-m", "src.asc_client.gui.search_worker"]
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(
             cmd,
             cwd=os.getcwd(),
@@ -340,6 +432,7 @@ class GuiDexStore:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            creationflags=creationflags,
         )
         proc.stdin.write(json.dumps(payload))
         proc.stdin.close()

@@ -75,6 +75,42 @@ def parse_encoded_array(data, pos, hlw_strs, hlw_types, hlw_fields, hlw_methods)
         elements.append(elem)
     return elements
 
+def parse_encoded_annotation(data, pos, hlw_strs, hlw_types, hlw_fields, hlw_methods):
+    start = pos
+    type_idx, c = read_uleb128_fast(data, pos)
+    pos += c
+    hlw_types.add(type_idx)
+    size, c = read_uleb128_fast(data, pos)
+    pos += c
+    elements = []
+    for _ in range(size):
+        name_idx, c = read_uleb128_fast(data, pos)
+        pos += c
+        hlw_strs.add(name_idx)
+        c, elem = parse_encoded_value(data, pos, hlw_strs, hlw_types, hlw_fields, hlw_methods)
+        pos += c
+        elements.append((name_idx, elem))
+    return pos - start, {
+        'type_idx': type_idx,
+        'elements': elements,
+    }
+
+def parse_annotation_item(data, off, hlw_strs, hlw_types, hlw_fields, hlw_methods):
+    visibility = data[off]
+    size, annotation = parse_encoded_annotation(
+        data,
+        off + 1,
+        hlw_strs,
+        hlw_types,
+        hlw_fields,
+        hlw_methods,
+    )
+    return {
+        'visibility': visibility,
+        'annotation': annotation,
+        'size': size + 1,
+    }
+
 def rebuild_encoded_value(elem, im):
     out = bytearray()
     value_type = elem[0]
@@ -132,6 +168,23 @@ def rebuild_encoded_array(elements, im):
     out.extend(write_uleb128(len(elements)))
     for e in elements:
         out.extend(rebuild_encoded_value(e, im))
+    return out
+
+def rebuild_encoded_annotation(annotation, im):
+    out = bytearray()
+    out.extend(write_uleb128(im.type_restruct_idx.get(annotation['type_idx'], 0)))
+    elements = annotation['elements']
+    out.extend(write_uleb128(len(elements)))
+    for name_idx, elem in elements:
+        name = im.origin_strings[name_idx] if name_idx < len(im.origin_strings) else ""
+        out.extend(write_uleb128(im.str_restruct_idx.get(name, 0)))
+        out.extend(rebuild_encoded_value(elem, im))
+    return out
+
+def rebuild_annotation_item(item, im):
+    out = bytearray()
+    out.append(item['visibility'])
+    out.extend(rebuild_encoded_annotation(item['annotation'], im))
     return out
 
 def parse_debug_info(data, pos, hlw_strs, hlw_types):

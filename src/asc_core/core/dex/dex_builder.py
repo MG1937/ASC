@@ -2,6 +2,7 @@ import struct
 import array
 import time
 from utils.leb128 import write_uleb128, write_sleb128
+from utils.dex_parser import rebuild_annotation_item
 from core.dex.dex_remapper import DexIndexMapper
 from core.dex.dex_constructor import DexHollower
 
@@ -76,7 +77,77 @@ class DexBuilder:
                 
         if self.debug: t_type_lists = time.perf_counter()
         
-        # Annotations (empty for now)
+        # Annotations
+        annotation_item_offs = {}
+        annotation_set_offs = {}
+        annotation_set_ref_offs = {}
+        annotation_dir_off = 0
+        if self.hlw.annotation_directory is not None:
+            for old_off, item in sorted(self.hlw.annotation_items.items()):
+                annotation_item_offs[old_off] = len(self.out)
+                self.out.extend(rebuild_annotation_item(item, self.im))
+
+            while len(self.out) & 3 != 0: self.out.append(0)
+            for old_off, anno_set in sorted(self.hlw.annotation_sets.items()):
+                annotation_set_offs[old_off] = len(self.out)
+                items = sorted(
+                    anno_set['items'],
+                    key=lambda item_off: self.im.type_restruct_idx.get(
+                        self.hlw.annotation_items[item_off]['annotation']['type_idx'],
+                        0,
+                    ) if item_off in self.hlw.annotation_items else 0,
+                )
+                self.out.extend(len(items).to_bytes(4, 'little'))
+                for item_off in items:
+                    self.out.extend(annotation_item_offs.get(item_off, 0).to_bytes(4, 'little'))
+
+            while len(self.out) & 3 != 0: self.out.append(0)
+            for old_off, refs in sorted(self.hlw.annotation_set_refs.items()):
+                annotation_set_ref_offs[old_off] = len(self.out)
+                self.out.extend(len(refs).to_bytes(4, 'little'))
+                for set_off in refs:
+                    self.out.extend(annotation_set_offs.get(set_off, 0).to_bytes(4, 'little'))
+
+            while len(self.out) & 3 != 0: self.out.append(0)
+            annotation_dir_off = len(self.out)
+            anno_dir = self.hlw.annotation_directory
+            field_annotations = sorted(
+                [
+                    (self.im.field_restruct_idx[field_idx], set_off)
+                    for field_idx, set_off in anno_dir['field_annotations']
+                    if field_idx in self.im.field_restruct_idx
+                ],
+                key=lambda item: item[0],
+            )
+            method_annotations = sorted(
+                [
+                    (self.im.method_restruct_idx[method_idx], set_off)
+                    for method_idx, set_off in anno_dir['method_annotations']
+                    if method_idx in self.im.method_restruct_idx
+                ],
+                key=lambda item: item[0],
+            )
+            parameter_annotations = sorted(
+                [
+                    (self.im.method_restruct_idx[method_idx], ref_off)
+                    for method_idx, ref_off in anno_dir['parameter_annotations']
+                    if method_idx in self.im.method_restruct_idx
+                ],
+                key=lambda item: item[0],
+            )
+            self.out.extend(annotation_set_offs.get(anno_dir['class_annotations_off'], 0).to_bytes(4, 'little'))
+            self.out.extend(len(field_annotations).to_bytes(4, 'little'))
+            self.out.extend(len(method_annotations).to_bytes(4, 'little'))
+            self.out.extend(len(parameter_annotations).to_bytes(4, 'little'))
+            for field_idx, set_off in field_annotations:
+                self.out.extend(field_idx.to_bytes(4, 'little'))
+                self.out.extend(annotation_set_offs.get(set_off, 0).to_bytes(4, 'little'))
+            for method_idx, set_off in method_annotations:
+                self.out.extend(method_idx.to_bytes(4, 'little'))
+                self.out.extend(annotation_set_offs.get(set_off, 0).to_bytes(4, 'little'))
+            for method_idx, ref_off in parameter_annotations:
+                self.out.extend(method_idx.to_bytes(4, 'little'))
+                self.out.extend(annotation_set_ref_offs.get(ref_off, 0).to_bytes(4, 'little'))
         
         # Static Values
         static_values_off = 0
@@ -282,7 +353,7 @@ class DexBuilder:
         super_idx = self.im.type_restruct_idx.get(clz_def_data[2], 0xffffffff)
         src_idx = self.im.str_restruct_idx.get(self.im.origin_strings[clz_def_data[4]], 0xffffffff) if clz_def_data[4] != 0xffffffff else 0xffffffff
         
-        self.out.extend(array.array('I', [clz_idx, acc_flags, super_idx, ifs_off, src_idx, 0, class_data_off, static_values_off]).tobytes())
+        self.out.extend(array.array('I', [clz_idx, acc_flags, super_idx, ifs_off, src_idx, annotation_dir_off, class_data_off, static_values_off]).tobytes())
         
         if self.debug: t_ids = time.perf_counter()
 
@@ -319,6 +390,15 @@ class DexBuilder:
                 first_type_list_off = min(valid_proto_param_offs)
         if type_list_count > 0:
             map_items.append((0x1001, type_list_count, first_type_list_off))
+
+        if len(annotation_set_ref_offs) > 0:
+            map_items.append((0x1002, len(annotation_set_ref_offs), min(annotation_set_ref_offs.values())))
+        if len(annotation_set_offs) > 0:
+            map_items.append((0x1003, len(annotation_set_offs), min(annotation_set_offs.values())))
+        if annotation_dir_off > 0:
+            map_items.append((0x2006, 1, annotation_dir_off))
+        if len(annotation_item_offs) > 0:
+            map_items.append((0x2004, len(annotation_item_offs), min(annotation_item_offs.values())))
 
         if class_data_off > 0:
             map_items.append((0x2000, 1, class_data_off))
