@@ -46,7 +46,9 @@ CI checks out the PR's exact base SHA. Direct pushes to `dev-0.1.0` compare
 against the pre-push SHA, so the candidate cannot become its own baseline.
 Other push/manual builds compare against `MG1937/ASC:dev-0.1.0`. A missing
 baseline fails the job. The same interpreter,
-runner, DEX, original scripts and query arguments exercise both revisions.
+runner, DEX, original scripts and query arguments exercise both revisions. On
+Linux the comparison and its child processes use one fixed available CPU; both
+sides use `PYTHONHASHSEED=0`. These controls are recorded in the report.
 
 The comparison covers 20 module timings from `test_findrefs.py`, core decompilation
 from `test.py`, and real-APK CLI `getclass` / `findrefs`: **23 metrics** in total.
