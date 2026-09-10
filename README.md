@@ -36,7 +36,8 @@ class lookup can cancel other entries after a hit. Reference searches build
 in-memory lookup tables on demand, including a 16-byte instruction bucket map.
 The bucket lookup is constant time, but building the map and validating instruction
 boundaries still costs work. The GUI loads DEX buffers and maintains class/source
-caches. The benchmark above is the author's reported result, not a guarantee for
+caches. Decompilation retains the dummy-module import shortcuts and pure-Python
+MUTF-8 shim; the GUI restores its module snapshot after decompilation. The benchmark above is the author's reported result, not a guarantee for
 all APKs or an automated benchmark reproduced by the regression suite.
 
 # Tests
@@ -47,6 +48,6 @@ python tests/run_tests.py
 
 Tests generate a small DEX and temporary stored/Deflate multidex APKs, so no
 commercial APK is required. With `requirements.txt` installed, the suite also
-checks CLI decompilation, module preservation, and the GUI data store without
+checks CLI decompilation, the dummy-module fast path, and the GUI data store without
 opening a window. Without Androguard, those integration tests are explicitly
 skipped; the reference and checksum regressions still run.
