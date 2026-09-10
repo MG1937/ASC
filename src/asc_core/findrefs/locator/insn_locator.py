@@ -71,7 +71,7 @@ class InsnLocator(BaseLocator):
 
         old = insn_maps.get(insn_bucket_start)
         # R8 insn deduplicate machenism, different method may refer to same insn body
-        if old:
+        if old is not None:
             if isinstance(old, int):
                 midx = [midx, old]
             else:
@@ -119,7 +119,11 @@ class InsnLocator(BaseLocator):
         # dont reuse tinydex, frequent lazy parser may cause bad performance
         # parse all items in one shot by map!
         buf = self.buf
+        if not self.mapoff:
+            self._build_map_bydef()
+            return
         mapsize = _STRUCT_I.unpack_from(buf, self.mapoff)[0]
+        mtype = None
         mapoff = self.mapoff + 4
         for i in range(mapsize):
             mtype = _STRUCT_H.unpack_from(buf, mapoff)[0]
@@ -140,6 +144,7 @@ class InsnLocator(BaseLocator):
         if self.parsed:
             return
         class_def_off, class_def_size = self.header.classes
+        buf = self.buf
         data = bytes(buf)
         for i in range(class_def_size):
             class_data_off = _STRUCT_I.unpack_from(buf, class_def_off + 24)[0]
@@ -154,8 +159,9 @@ class InsnLocator(BaseLocator):
         t_start = time.perf_counter() if self.debug else None
         self._build_map_bymap()
         tmp_list = self.insn_maps.keys()
-        self.code_item_start = min(tmp_list) << 4
-        self.code_item_end = (max(tmp_list) + 1) << 4
+        if tmp_list:
+            self.code_item_start = min(tmp_list) << 4
+            self.code_item_end = (max(tmp_list) + 1) << 4
         self.parsed = True
         self._debug_log("parse", t_start, len(self.insn_maps))
 
