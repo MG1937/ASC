@@ -75,6 +75,37 @@ class StringTests(unittest.TestCase):
         self.assertEqual(self.locate(data, 'first'), {3})
         self.assertEqual(self.locate(data, 'Lexample/Test;'), {0})
 
+    def make_strings(self, values, gap=b''):
+        from dex_fixture import uleb
+        data = bytearray(make_dex())
+        ids_off = struct.unpack_from('<I', data, 60)[0]
+        struct.pack_into('<I', data, 56, len(values))
+        for idx, value in enumerate(values):
+            data.extend(gap)
+            struct.pack_into('<I', data, ids_off + 4 * idx, len(data))
+            data.extend(uleb(len(value)) + value + b'\0')
+        return data
+
+    def test_literal_header_hit_does_not_hide_content_hit(self):
+        self.assertEqual(self.locate(self.make_strings([b'A' * 65]), 'A'), {0})
+        self.assertEqual(self.locate(self.make_strings([b'B' * 65]), 'A'), set())
+
+    def test_multibyte_length_and_repeated_hits(self):
+        data = self.make_strings([b'A' * 200 + b'View', b'ViewView'])
+        self.assertEqual(self.locate(data, 'View'), {0, 1})
+        self.assertEqual(self.locate(data, 'V.ew'), {0, 1})
+        self.assertEqual(self.locate(self.make_strings([b'A' * 128]), '\x01'), set())
+
+    def test_bytes_between_strings_are_not_search_results(self):
+        data = self.make_strings([b'first', b'second', b'third'], gap=b'View\0')
+        self.assertEqual(self.locate(data, 'View'), set())
+        self.assertEqual(self.locate(data, 'second'), {1})
+
+    def test_regex_cannot_cross_string_terminators(self):
+        data = self.make_strings([b'AAA', b'BBB'])
+        self.assertEqual(self.locate(data, 'A.*B'), set())
+        self.assertEqual(self.locate(data, 'A\x00\x03B'), set())
+
     def test_empty_string_table(self):
         data = bytearray(make_dex())
         struct.pack_into('<II', data, 56, 0, 0)
