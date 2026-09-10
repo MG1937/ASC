@@ -9,5 +9,4 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 # Benchmark
 ![Benchmark](./docs/benchmark_all_en.png)
-[ASC_Benchmark.mp4](https://github.com/MG1937/ASC/blob/main/docs/ASC_Benchmark.mp4)
 
