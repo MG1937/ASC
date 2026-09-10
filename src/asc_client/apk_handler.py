@@ -282,15 +282,15 @@ def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : t
     tid = threading.get_ident() & 0xFFFF
     name = entry[0]
     if stop_event.is_set():
-        return False, None
+        return False, None, None
 
     t0 = time.perf_counter()
     data = _inflate_dex(mm, entry, stop_event)
     if data is None:
-        return False, None
+        return False, None, None
     t1 = time.perf_counter()
     if stop_event.is_set():
-        return False, None
+        return False, None, None
 
     hit = False
     hit_name = None

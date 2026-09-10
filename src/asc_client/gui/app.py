@@ -983,6 +983,33 @@ class AscGuiApp:
             if args:
                 self.source_text.tag_add(tag_name, *args)
 
+    def _offset_spans_to_index_spans(self, text : str, spans):
+        line_starts = [0]
+        pos = 0
+        while True:
+            pos = text.find("\n", pos)
+            if pos < 0:
+                break
+            pos += 1
+            line_starts.append(pos)
+
+        def to_index(offset : int):
+            left = 0
+            right = len(line_starts)
+            while left < right:
+                mid = (left + right) >> 1
+                if line_starts[mid] <= offset:
+                    left = mid + 1
+                else:
+                    right = mid
+            line_idx = left - 1
+            return f"{line_idx + 1}.{offset - line_starts[line_idx]}"
+
+        ret = {}
+        for tag_name, tag_spans in spans.items():
+            ret[tag_name] = [(to_index(start), to_index(end)) for start, end in tag_spans]
+        return ret
+
     def _tag_index_ranges(self, tag_name : str, spans, batch_size : int = 512):
         for offset in range(0, len(spans), batch_size):
             args = []
@@ -1102,6 +1129,7 @@ class AscGuiApp:
 
         def worker():
             spans = self._collect_basic_java_highlight_spans(text)
+            spans = self._offset_spans_to_index_spans(text, spans)
             self.events.put(("highlight_ready", generation, spans))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1123,7 +1151,7 @@ class AscGuiApp:
             end_offset = min(offset + self._highlight_apply_batch, len(work_items))
             for idx in range(offset, end_offset):
                 tag_name, start, end = work_items[idx]
-                self._tag_range(tag_name, start, end)
+                self.source_text.tag_add(tag_name, start, end)
             if end_offset < len(work_items):
                 self._highlight_apply_job = self.root.after(1, apply_chunk, end_offset)
             else:
