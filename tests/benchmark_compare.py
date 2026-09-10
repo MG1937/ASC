@@ -22,7 +22,7 @@ def revision(root):
 
 
 def measure(root, directory, case, output, sample):
-    env = dict(os.environ, PYTHONPATH=str(root / 'src' / 'asc_core'))
+    env = dict(os.environ, PYTHONPATH=str(root / 'src' / 'asc_core'), PYTHONHASHSEED='0')
     if case in ('unit', 'core'):
         command = [sys.executable, 'test_findrefs.py' if case == 'unit' else 'test.py']
     else:
@@ -69,7 +69,12 @@ def main():
     if args.samples < 15:
         parser.error('at least 15 paired samples are required')
     roots = {'base': args.baseline.resolve(), 'candidate': args.candidate.resolve()}
-    report = {'python': sys.version, 'platform': platform.platform(), 'samples': {}, 'errors': []}
+    affinity = None
+    if hasattr(os, 'sched_getaffinity'):
+        affinity = [min(os.sched_getaffinity(0))]
+        os.sched_setaffinity(0, affinity)
+    report = {'python': sys.version, 'platform': platform.platform(),
+              'cpu_affinity': affinity, 'pythonhashseed': '0', 'samples': {}, 'errors': []}
     args.output.mkdir(parents=True, exist_ok=True)
     for side in roots:
         (args.output / side).mkdir(exist_ok=True)
