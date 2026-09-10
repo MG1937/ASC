@@ -51,3 +51,24 @@ commercial APK is required. With `requirements.txt` installed, the suite also
 checks CLI decompilation, the dummy-module fast path, and the GUI data store without
 opening a window. Without Androguard, those integration tests are explicitly
 skipped; the reference and checksum regressions still run.
+
+CI runs `python tests/run_tests.py --require-decompiler`, which fails if
+Androguard is missing or any regression is skipped. The import audit also checks
+that the dummy dependencies were never imported before being replaced, and a
+separate `python -S` subprocess verifies that reference searches need no installed
+third-party packages.
+
+To run the cold-process startup gate:
+
+```sh
+python tests/benchmark_startup.py --samples 9 --max-total-ms 100 --max-wall-ms 250
+```
+
+Each sample starts a new interpreter and runs the real `getclass --debug` command
+on the same generated Deflate APK, checking both method bodies are decompiled.
+The gate uses the median of all nine samples: at most 100 ms for the CLI's
+`Total Execution Time` and 250 ms for process wall time. These budgets target the
+Linux CI runners; use the command-line overrides when profiling slower machines.
+This measures interpreter cold starts with warm filesystem caches, not large-APK
+throughput. CI runs the gate on Python 3.11 and 3.12 and uploads `report.json` plus
+all stdout/stderr logs under `artifacts/startup/`, including on gate failure.

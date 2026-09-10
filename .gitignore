@@ -10,3 +10,5 @@ testcase.txt
 temp/*
 
 .venv/
+
+artifacts/startup/
