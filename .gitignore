@@ -8,3 +8,10 @@ testcase.txt
 *.jar
 *.jadx
 temp/*
+
+.venv/
+
+artifacts/startup/
+
+!tests/fixtures/reference-workload.zip
+artifacts/reference/

@@ -78,9 +78,11 @@ class AscHandler:
         return f"{field.cls.fullname}->{field.name}"
 
     def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
-        _lazy_import()
-        dex = _DEX.parse(memoryview(dex_buf), dex_name)
-        ref_manager = _FindRefManager(dex)
+        from src.asc_core.findrefs.findrefs_manager import FindRefManager
+        from src.asc_core.utils.tinydex import DEX
+
+        dex = DEX.parse(memoryview(dex_buf), dex_name)
+        ref_manager = FindRefManager(dex)
         query = copy.deepcopy(find)
         matched_idxs = ref_manager.find_ref(query, True)
         mids = query[find_type]
