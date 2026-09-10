@@ -24,6 +24,17 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(set(results[0]), {0, 1})
 
+    def test_repeated_scans_preserve_method_bounds(self):
+        locator = InsnLocator(DEX.parse(memoryview(make_dex()), 'fixture.dex'))
+        locator.parse()
+        original_bounds = dict(locator.method_bounds)
+        scanner = CodeItemScanner(locator)
+        for _ in range(2):
+            query = {'string': {5}}
+            scanner.scan(query)
+            self.assertEqual(set(query['string'][0]), {0, 1})
+            self.assertEqual(locator.method_bounds, original_bounds)
+
     def test_fallback_without_class_data_map_entry(self):
         data = bytearray(make_dex())
         map_off = struct.unpack_from('<I', data, 52)[0]
