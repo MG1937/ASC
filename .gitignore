@@ -8,3 +8,5 @@ testcase.txt
 *.jar
 *.jadx
 temp/*
+
+.venv/
