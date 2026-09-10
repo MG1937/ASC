@@ -41,6 +41,17 @@ def _multiprocessing_state() -> str:
     )
 
 
+def _snapshot_sys_modules():
+    return dict(sys.modules)
+
+
+def _restore_sys_modules(snapshot):
+    for name in tuple(sys.modules.keys()):
+        if name not in snapshot:
+            sys.modules.pop(name, None)
+    sys.modules.update(snapshot)
+
+
 def format_class_name(name : str) -> str:
     if not name:
         raise ValueError("Class name cannot be empty")
@@ -246,7 +257,11 @@ class GuiDexStore:
         from src.asc_client.asc_handler import AscHandler
 
         with _GUI_MP_LOCK:
-            source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
+            snapshot = _snapshot_sys_modules()
+            try:
+                source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
+            finally:
+                _restore_sys_modules(snapshot)
         ret = (dex_name, source)
         with self._source_lock:
             self.source_cache[dalvik_class] = ret

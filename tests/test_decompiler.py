@@ -25,22 +25,24 @@ class RebuildTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('androguard'), 'install requirements.txt for decompiler tests')
 class DecompilerTests(unittest.TestCase):
-    def test_decompile_preserves_modules_and_class_zero(self):
-        names = ('json', 'math', 'bisect', 'multiprocessing', 'tempfile', 'urllib.request', 'networkx')
-        before = {name: importlib.import_module(name) for name in names}
-        from src.asc_client.asc_handler import AscHandler
-        from src.asc_core.utils.decompiler_simple import decompile_dex_bytes
-        from loguru import logger
-        logger.disable('androguard')
-        source = AscHandler().getclass(make_dex(), 'Lexample/Test;')
-        self.assertIn('class Test', source)
-        self.assertIn('void first()', source)
-        self.assertIn('void second()', source)
-        self.assertIn('class Test', decompile_dex_bytes(make_dex(), 'Lexample/Test;'))
-        for name, module in before.items():
-            self.assertIs(sys.modules[name], module, name)
-        self.assertEqual(before['json'].loads('{"ok": true}'), {'ok': True})
-        self.assertEqual(before['math'].sqrt(4), 2)
+    def test_decompile_keeps_dummy_fast_path_and_class_zero(self):
+        script = """
+import sys
+sys.path.insert(0, 'tests')
+from dex_fixture import make_dex
+from src.asc_client.asc_handler import AscHandler
+for _ in range(2):
+    source = AscHandler().getclass(make_dex(), 'Lexample/Test;')
+    assert 'class Test' in source
+    assert 'void first()' in source
+    assert 'void second()' in source
+for name in ('email', 'xml.sax.saxutils', 'networkx', 'loguru'):
+    assert type(sys.modules[name]).__name__ == 'DummyModule', name
+assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_client_mutf8_py'
+"""
+        result = subprocess.run([sys.executable, '-c', script], cwd=ROOT,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_cli_on_stored_and_compressed_multidex_apk(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,3 +1,62 @@
+import sys
+class DummyClass: pass
+class DummyModule:
+    __path__ = []
+    def __init__(self):
+        self.APK = DummyClass
+    def __getattr__(self, name): return DummyModule()
+    def __iter__(self): return iter([])
+    def __call__(self, *args, **kwargs): return DummyModule()
+    
+
+# The dummy import trick bascially gen by LLM 20260607
+
+sys.modules['androguard.core.apk'] = DummyModule()
+sys.modules['networkx'] = DummyModule()
+sys.modules['pygments'] = DummyModule()
+sys.modules['lxml'] = DummyModule()
+sys.modules['asn1crypto'] = DummyModule()
+sys.modules['asn1crypto.x509'] = DummyModule()
+sys.modules['cryptography'] = DummyModule()
+sys.modules['matplotlib'] = DummyModule()
+sys.modules['pydot'] = DummyModule()
+sys.modules['IPython'] = DummyModule()
+sys.modules['colorama'] = DummyModule()
+sys.modules['dateutil'] = DummyModule()
+sys.modules['urllib3'] = DummyModule()
+sys.modules['requests'] = DummyModule()
+sys.modules['idna'] = DummyModule()
+sys.modules['chardet'] = DummyModule()
+sys.modules['certifi'] = DummyModule()
+sys.modules['pkg_resources'] = DummyModule()
+
+sys.modules['loguru'] = DummyModule()
+sys.modules['loguru._logger'] = DummyModule()
+sys.modules['click'] = DummyModule()
+sys.modules['urllib'] = DummyModule()
+sys.modules['urllib.request'] = DummyModule()
+sys.modules['http.client'] = DummyModule()
+sys.modules['email'] = DummyModule()
+sys.modules['email.parser'] = DummyModule()
+sys.modules['email.message'] = DummyModule()
+sys.modules['multiprocessing'] = DummyModule()
+sys.modules['multiprocessing.context'] = DummyModule()
+sys.modules['multiprocessing.reduction'] = DummyModule()
+sys.modules['xml.sax.saxutils'] = DummyModule()
+
+sys.modules['tempfile'] = DummyModule()
+sys.modules['bz2'] = DummyModule()
+sys.modules['lzma'] = DummyModule()
+sys.modules['shutil'] = DummyModule()
+sys.modules['bisect'] = DummyModule()
+sys.modules['random'] = DummyModule()
+sys.modules['json'] = DummyModule()
+sys.modules['json.scanner'] = DummyModule()
+sys.modules['json.decoder'] = DummyModule()
+sys.modules['json.encoder'] = DummyModule()
+sys.modules['math'] = DummyModule()
+sys.modules['weakref'] = DummyModule()
+
 from androguard.core.dex import DEX
 import androguard.core.dex as androguard_dex
 
