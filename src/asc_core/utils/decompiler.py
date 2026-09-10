@@ -60,6 +60,17 @@ sys.modules['weakref'] = DummyModule()
 from androguard.core.dex import DEX
 import androguard.core.dex as androguard_dex
 
+original_header_init = androguard_dex.HeaderItem.__init__
+def monkey_header_init(self, offset, buff, cm):
+    try:
+        original_header_init(self, offset, buff, cm)
+    except ValueError as e:
+        if "Adler32" in str(e):
+            pass
+        else:
+            raise e
+androguard_dex.HeaderItem.__init__ = monkey_header_init
+
 from androguard.decompiler import decompile
 from androguard.decompiler import util as androguard_util
 from androguard.core.analysis.analysis import MethodAnalysis
