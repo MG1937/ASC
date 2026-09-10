@@ -15,3 +15,6 @@ artifacts/startup/
 
 !tests/fixtures/reference-workload.zip
 artifacts/reference/
+
+.performance-base/
+artifacts/comparison/
