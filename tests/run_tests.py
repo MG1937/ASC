@@ -24,7 +24,8 @@ if __name__ == '__main__':
                 else:
                     yield item
         suite = unittest.TestSuite(test for test in tests(suite)
-                                   if ('test_decompiler.DecompilerTests.' in test.id())
+                                   if ('test_decompiler.DecompilerTests.' in test.id()
+                                       or test.id().endswith('test_archive_is_reproducible_and_runs_outside_checkout'))
                                    == (args.suite == 'integration'))
     if suite.countTestCases() == 0:
         parser.error('selected suite contains no tests')
