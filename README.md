@@ -8,4 +8,7 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 # Benchmark
 ![Benchmark](./docs/benchmark_all_en.png)
+<video src="./docs/ASC_Benchmark.mp4" controls width="800">
+  ASC_Benchmark.mp4
+</video>
 
