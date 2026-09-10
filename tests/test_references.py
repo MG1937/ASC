@@ -79,3 +79,23 @@ class StringTests(unittest.TestCase):
         data = bytearray(make_dex())
         struct.pack_into('<II', data, 56, 0, 0)
         self.assertEqual(self.locate(data, 'token'), set())
+
+
+class DependencyTests(unittest.TestCase):
+    def test_reference_search_without_site_packages(self):
+        import subprocess
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        script = """
+import sys
+sys.path.insert(0, 'tests')
+from dex_fixture import make_dex
+from src.asc_client.asc_handler import AscHandler
+lines = AscHandler().findrefs('fixture.dex', make_dex(), 'string', {'string': 'token'})
+assert len(lines) == 2, lines
+assert 'androguard' not in sys.modules
+assert 'src.asc_core.utils.decompiler' not in sys.modules
+"""
+        result = subprocess.run([sys.executable, '-S', '-c', script], cwd=root,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)

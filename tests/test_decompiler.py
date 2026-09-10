@@ -30,6 +30,8 @@ class DecompilerTests(unittest.TestCase):
 import sys
 sys.path.insert(0, 'tests')
 from dex_fixture import make_dex
+loaded = []
+sys.addaudithook(lambda event, args: loaded.append(args[0]) if event == 'import' else None)
 from src.asc_client.asc_handler import AscHandler
 for _ in range(2):
     source = AscHandler().getclass(make_dex(), 'Lexample/Test;')
@@ -38,6 +40,7 @@ for _ in range(2):
     assert 'void second()' in source
 for name in ('email', 'xml.sax.saxutils', 'networkx', 'loguru'):
     assert type(sys.modules[name]).__name__ == 'DummyModule', name
+    assert not any(module == name or module.startswith(name + '.') for module in loaded), name
 assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_client_mutf8_py'
 """
         result = subprocess.run([sys.executable, '-c', script], cwd=ROOT,
