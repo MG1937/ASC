@@ -7,5 +7,4 @@ testcase.txt
 *.zip
 *.jar
 *.jadx
-*.md
 temp/*
