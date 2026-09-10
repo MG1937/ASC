@@ -1,4 +1,6 @@
 import argparse
+import os
+import subprocess
 import sys
 import time
 
@@ -74,6 +76,11 @@ def _handle_getclass(args):
         print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us")
         print("-" * 50)
 
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", errors="replace", newline="\n") as fp:
+            fp.write(source_code)
+            if not source_code.endswith("\n"):
+                fp.write("\n")
     print(source_code)
 
 
@@ -83,12 +90,21 @@ def _handle_findrefs(args):
     apk_handler = ApkHandler(args.apk_path, debug=args.debug, max_workers=args.threads)
     find_type, find = _get_find_query(args)
 
+    output_fp = None
+    if args.output:
+        output_fp = open(args.output, "w", encoding="utf-8", errors="replace", newline="\n")
+
     out = sys.stdout
     for _dex_name, lines in apk_handler.for_each_findrefs(find_type, find):
         if not lines:
             continue
-        out.write("\n".join(lines))
-        out.write("\n")
+        text = "\n".join(lines) + "\n"
+        out.write(text)
+        if output_fp is not None:
+            output_fp.write(text)
+
+    if output_fp is not None:
+        output_fp.close()
 
     if args.debug:
         t_end = time.perf_counter()
@@ -96,53 +112,63 @@ def _handle_findrefs(args):
 
 
 def _run_gui(argv):
-    parser = argparse.ArgumentParser(description="ASC GUI entry.")
+    parser = argparse.ArgumentParser(
+        description="ASC GUI entry.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py app.apk --gui
+  python main.py app.apk --gui --debug
+  python main.py app.apk --gui --threads 16
+""",
+    )
     parser.add_argument("apk_path", help="Path to the input APK file.")
     parser.add_argument("--gui", action="store_true", help="Launch GUI.")
-    parser.add_argument("--threads", type=int, default=8, help="Worker count.")
+    parser.add_argument("--threads", "--thread", type=int, default=8, help="Worker count.")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode.")
+    parser.add_argument("--gui-foreground", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    if not args.debug and not args.gui_foreground:
+        cmd = [
+            sys.executable,
+            os.path.abspath(__file__),
+            args.apk_path,
+            "--gui",
+            "--gui-foreground",
+            "--threads",
+            str(args.threads),
+        ]
+        creationflags = 0
+        start_new_session = False
+        if os.name == "nt":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            start_new_session = True
+        subprocess.Popen(
+            cmd,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=creationflags,
+            start_new_session=start_new_session,
+        )
+        return
 
     from src.asc_client.gui.app import launch_gui
     launch_gui(args.apk_path, max_workers=args.threads, debug=args.debug)
 
 
 def main():
+    if len(sys.argv) == 1:
+        _build_main_parser().print_help()
+        return
     if "--gui" in sys.argv[1:]:
         _run_gui(sys.argv[1:])
         return
 
-    parser = argparse.ArgumentParser(description="ASC tooling entry.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    getclass_parser = subparsers.add_parser("getclass", help="Locate the target class in APK, extract one DEX in memory, then decompile.")
-    getclass_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
-    getclass_parser.add_argument("--threads", type=int, default=8, help="Worker thread count.")
-    getclass_parser.add_argument("apk_path", help="Path to the input APK file.")
-    getclass_parser.add_argument("dalvik_class", help="The Dalvik format class name to extract (e.g., Lcom/poc/Main;).")
-
-    findrefs_parser = subparsers.add_parser("findrefs", help="Find code references for string/type/method/field across all DEX entries in APK.")
-    findrefs_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
-    findrefs_parser.add_argument("--threads", type=int, default=8, help="Worker thread count.")
-    findrefs_parser.add_argument("apk_path", help="Path to the input APK file.")
-    find_subparsers = findrefs_parser.add_subparsers(dest="find_type", required=True)
-
-    string_parser = find_subparsers.add_parser("string", help="Find references to a fuzzy string.")
-    string_parser.add_argument("value", help="Fuzzy string pattern.")
-
-    type_parser = find_subparsers.add_parser("type", help="Find references to a fuzzy type descriptor/name.")
-    type_parser.add_argument("value", help="Fuzzy type pattern.")
-
-    method_parser = find_subparsers.add_parser("method", help="Find references to methods.")
-    method_parser.add_argument("name", nargs="?", default=None, help="Fuzzy method name.")
-    method_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
-    method_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
-
-    field_parser = find_subparsers.add_parser("field", help="Find references to fields.")
-    field_parser.add_argument("name", nargs="?", default=None, help="Fuzzy field name.")
-    field_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
-    field_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
-
+    parser = _build_main_parser()
     args = parser.parse_args()
 
     try:
@@ -156,6 +182,112 @@ def main():
             import traceback
             traceback.print_exc()
         sys.exit(1)
+
+
+def _build_main_parser():
+    parser = argparse.ArgumentParser(
+        description="ASC tooling entry.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py app.apk --gui
+  python main.py getclass app.apk Lcom/poc/Main; -o Main.java
+  python main.py getclass app.apk com.poc.Main --threads 16
+  python main.py findrefs app.apk string token -o string_refs.txt
+  python main.py findrefs app.apk type com.poc.Main
+  python main.py findrefs app.apk method onCreate --class com.poc.Main
+  python main.py findrefs app.apk method notify --class openclaw --fuzzy-class -o method_refs.txt
+  python main.py findrefs app.apk field changeQuickRedirect -o field_refs.txt
+""",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    getclass_parser = subparsers.add_parser(
+        "getclass",
+        help="Locate the target class in APK, extract one DEX in memory, then decompile.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py getclass app.apk Lcom/poc/Main;
+  python main.py getclass app.apk com.poc.Main -o Main.java
+  python main.py getclass app.apk com.poc.Main --threads 16 --debug
+""",
+    )
+    getclass_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    getclass_parser.add_argument("--threads", "--thread", type=int, default=8, help="Worker thread count.")
+    getclass_parser.add_argument("-o", "--output", help="Also write decompiled output to this file.")
+    getclass_parser.add_argument("apk_path", help="Path to the input APK file.")
+    getclass_parser.add_argument("dalvik_class", help="The Dalvik format class name to extract (e.g., Lcom/poc/Main;).")
+
+    findrefs_parser = subparsers.add_parser(
+        "findrefs",
+        help="Find code references for string/type/method/field across all DEX entries in APK.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py findrefs app.apk string token -o string_refs.txt
+  python main.py findrefs app.apk type com.poc.Main
+  python main.py findrefs app.apk method onCreate --class com.poc.Main
+  python main.py findrefs app.apk method notify --class openclaw --fuzzy-class -o method_refs.txt
+  python main.py findrefs app.apk field changeQuickRedirect -o field_refs.txt
+""",
+    )
+    findrefs_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    findrefs_parser.add_argument("--threads", "--thread", type=int, default=8, help="Worker thread count.")
+    findrefs_parser.add_argument("apk_path", help="Path to the input APK file.")
+    find_subparsers = findrefs_parser.add_subparsers(dest="find_type", required=True)
+
+    string_parser = find_subparsers.add_parser(
+        "string",
+        help="Find references to a fuzzy string.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py findrefs app.apk string token
+  python main.py findrefs app.apk string Authorization -o string_refs.txt
+""",
+    )
+    string_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
+    string_parser.add_argument("value", help="Fuzzy string pattern.")
+
+    type_parser = find_subparsers.add_parser(
+        "type",
+        help="Find references to a fuzzy type descriptor/name.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py findrefs app.apk type com.poc.Main
+  python main.py findrefs app.apk type Lcom/poc/Main; -o type_refs.txt
+""",
+    )
+    type_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
+    type_parser.add_argument("value", help="Fuzzy type pattern.")
+
+    method_parser = find_subparsers.add_parser(
+        "method",
+        help="Find references to methods.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py findrefs app.apk method onCreate
+  python main.py findrefs app.apk method notify --class com.poc.Main
+  python main.py findrefs app.apk method notify --class poc --fuzzy-class -o method_refs.txt
+""",
+    )
+    method_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
+    method_parser.add_argument("name", nargs="?", default=None, help="Fuzzy method name.")
+    method_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
+    method_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
+
+    field_parser = find_subparsers.add_parser(
+        "field",
+        help="Find references to fields.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py findrefs app.apk field changeQuickRedirect
+  python main.py findrefs app.apk field token --class com.poc.Main
+  python main.py findrefs app.apk field token --class poc --fuzzy-class -o field_refs.txt
+""",
+    )
+    field_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
+    field_parser.add_argument("name", nargs="?", default=None, help="Fuzzy field name.")
+    field_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
+    field_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
+    return parser
 
 
 if __name__ == "__main__":
