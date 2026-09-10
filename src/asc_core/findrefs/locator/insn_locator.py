@@ -175,7 +175,7 @@ class InsnLocator(BaseLocator):
         insn_maps = self.insn_maps
 
         buf = self.buf
-        method_bounds = self.method_bounds.copy()
+        method_bounds = {}
         for off in offsets:
             midx = insn_maps.get(off >> 4)
             """
@@ -190,10 +190,10 @@ class InsnLocator(BaseLocator):
             # which means there is no possible to backtracking inside one method, so we can update method
             # start insn offset once we fullmatch an insn, avoid re-fullmatch from start of method
             # bugfix for insn mismatch issue 20260729
-            if isinstance(midx, int) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds[midx], off):
+            if isinstance(midx, int) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds.get(midx, self.method_bounds[midx]), off):
                 ret_table.append(midx)
                 method_bounds[midx] = off
-            elif isinstance(midx, list) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds[midx[0]], off):
+            elif isinstance(midx, list) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds.get(midx[0], self.method_bounds[midx[0]]), off):
                 ret_table.append(midx)
                 method_bounds[midx[0]] = off
             else:
