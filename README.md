@@ -11,3 +11,42 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 ![Benchmark](./docs/benchmark_all_en.png)
 [ASC_Benchmark.mp4](https://github.com/MG1937/ASC/blob/main/docs/ASC_Benchmark.mp4)
 
+
+# Running the current implementation
+
+Requires Python 3.11 or newer (the instruction verifier uses atomic regex groups).
+Reference searches use only the Python standard library. Class decompilation and
+Manifest viewing require the tested Androguard version:
+
+```sh
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python main.py findrefs app.apk string token
+python main.py getclass app.apk com.example.Main -o Main.java
+python main.py app.apk --gui
+```
+
+The GUI also needs Tkinter, which some Linux distributions package separately
+(e.g. `python3-tk` on Debian/Ubuntu).
+
+In this checkout, compressed DEX entries are inflated with zlib before lookup;
+class lookup can cancel other entries after a hit. Reference searches build
+in-memory lookup tables on demand, including a 16-byte instruction bucket map.
+The bucket lookup is constant time, but building the map and validating instruction
+boundaries still costs work. The GUI loads DEX buffers and maintains class/source
+caches. The benchmark above is the author's reported result, not a guarantee for
+all APKs or an automated benchmark reproduced by the regression suite.
+
+# Tests
+
+```sh
+python tests/run_tests.py
+```
+
+Tests generate a small DEX and temporary stored/Deflate multidex APKs, so no
+commercial APK is required. With `requirements.txt` installed, the suite also
+checks CLI decompilation, module preservation, and the GUI data store without
+opening a window. Without Androguard, those integration tests are explicitly
+skipped; the reference and checksum regressions still run.

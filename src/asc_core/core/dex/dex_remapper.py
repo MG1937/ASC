@@ -306,16 +306,16 @@ class DexIndexMapper:
         if hasattr(self, 'hollower'):
             # map source file
             src_idx = self.hollower.clz_def_hlw_strs.get(0x10)
-            if src_idx and src_idx != 0xffffffff:
+            if src_idx is not None and src_idx != 0xffffffff:
                 src_str = self.origin_strings[src_idx]
                 self._add_str_restruct(src_str)
             # map class idx
             clz_idx = self.hollower.clz_def_hlw_types.get(0)
-            if clz_idx and clz_idx != 0xffffffff:
+            if clz_idx is not None and clz_idx != 0xffffffff:
                 self._append_origin_type(clz_idx)
             # map superclass idx
             super_idx = self.hollower.clz_def_hlw_types.get(0x8)
-            if super_idx and super_idx != 0xffffffff:
+            if super_idx is not None and super_idx != 0xffffffff:
                 self._append_origin_type(super_idx)
             # map interfaces
             ifs_list = self.hollower.ifs_list_hlw_types
