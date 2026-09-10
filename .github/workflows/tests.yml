@@ -1,5 +1,5 @@
 name: Tests
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
@@ -11,8 +11,8 @@ jobs:
       matrix:
         python-version: ['3.11', '3.12']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -22,10 +22,14 @@ jobs:
         run: python tests/run_tests.py --require-decompiler
       - name: Check cold-process startup with --debug
         run: python tests/benchmark_startup.py --samples 9 --max-total-ms 100 --max-wall-ms 250
-      - name: Upload startup timings and raw debug logs
+      - name: Check supplied DEX benchmarks and 0.0880 s budget
+        run: python tests/benchmark_reference.py --samples 9
+      - name: Upload benchmark timings and raw debug logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
-          name: startup-python-${{ matrix.python-version }}
-          path: artifacts/startup/
+          name: benchmarks-python-${{ matrix.python-version }}
+          path: |
+            artifacts/startup/
+            artifacts/reference/
           if-no-files-found: warn
