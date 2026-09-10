@@ -1,6 +1,4 @@
 import struct
-import hashlib
-import zlib
 import array
 import time
 from utils.leb128 import write_uleb128, write_sleb128
@@ -459,9 +457,11 @@ class DexBuilder:
         # data_size, data_off
         self.out[104:112] = array.array('I', [file_size - 0x70, 0x70]).tobytes()
         
-        self.out[12:32] = hashlib.sha1(self.out[32:]).digest()
-        self.out[8:12] = (zlib.adler32(self.out[12:]) & 0xffffffff).to_bytes(4, 'little')
-
+        # signature
+        self.out[12:32] = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        # checksum
+        self.out[8:12] = b'\x00\x00\x00\x00'
+        
         if self.debug:
             t_header = time.perf_counter()
             print(f"[DexBuilder Profiler]")

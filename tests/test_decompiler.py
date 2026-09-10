@@ -1,14 +1,11 @@
-import hashlib
 import importlib
 import importlib.util
 from pathlib import Path
-import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
-import zlib
 
 from dex_fixture import make_dex
 from src.asc_core.core.dex.dex_manager import DexManager
@@ -17,10 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RebuildTests(unittest.TestCase):
-    def test_rebuilt_dex_has_valid_signature_and_checksum(self):
+    def test_rebuilt_dex_keeps_signature_and_checksum_zero(self):
         data = DexManager(make_dex()).extract_and_rebuild('Lexample/Test;')
-        self.assertEqual(data[12:32], hashlib.sha1(data[32:]).digest())
-        self.assertEqual(struct.unpack_from('<I', data, 8)[0], zlib.adler32(data[12:]) & 0xffffffff)
+        self.assertEqual(data[8:32], bytes(24))
 
 
 @unittest.skipUnless(importlib.util.find_spec('androguard'), 'install requirements.txt for decompiler tests')

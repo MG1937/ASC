@@ -50,7 +50,7 @@ Tests generate a small DEX and temporary stored/Deflate multidex APKs, so no
 commercial APK is required. With `requirements.txt` installed, the suite also
 checks CLI decompilation, the dummy-module fast path, and the GUI data store without
 opening a window. Without Androguard, those integration tests are explicitly
-skipped; the reference and checksum regressions still run.
+skipped; the reference and zeroed-header regressions still run.
 
 CI runs `python tests/run_tests.py --require-decompiler`, which fails if
 Androguard is missing or any regression is skipped. The import audit also checks
