@@ -18,3 +18,4 @@ artifacts/reference/
 
 .performance-base/
 artifacts/comparison/
+dist/
