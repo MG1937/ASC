@@ -45,16 +45,6 @@ class IndexHandler(DvmHandler):
             return new_idx
         return rev[origin_idx]
 
-    def add_index(self, idx_type, origin_idx):
-        """Pin origin_idx to a deterministic new index (idempotent)."""
-        rev = self.reverse_mapper[idx_type]
-        if origin_idx not in rev:
-            fwd = self.mapper[idx_type]
-            new_idx = len(fwd)
-            fwd[new_idx] = origin_idx
-            rev[origin_idx] = new_idx
-        return rev[origin_idx]
-
     def preregister_own_fields(self, fields):
         """Pin this class's own declared fields to the leading new field
         indices, ordered by original field_idx ascending.
@@ -63,9 +53,22 @@ class IndexHandler(DvmHandler):
         bytecode operands (rewritten here), the rebuilt field table
         (DexIndexMapper), the class_data declaration (DexBuilder) and the
         static_values encoded_array all follow the same original-index order,
-        so field initializers stay aligned with their fields."""
-        for field_obj in sorted(fields, key=lambda f: f.index):
-            self.add_index("FIELD", field_obj.index)
+        so field initializers stay aligned with their fields.
+
+        20260912
+        bad case example:
+        DEX: class -> fields [1732, 1733, 1734]
+        
+        1. class bytecodes -> sput v0, 1733
+        2. remap bytecodes -> "FIELD" : {1733 : 0} -> sput v0, 0
+        3. restruct fields -> 0 -> 1733
+        4. restruct class -> 1 -> 1732, 2 -> 1734
+        5. dex builder sorted fields we collected for valid diff idx: static field [1733, 1732, 1734] mismatch to original class fields!!!
+
+        so we need to pin our own class's fields before bytecode remap
+        """
+        for field_obj in fields: # valid dex's fields already sorted
+            self.mapIndex(field_obj.index, "FIELD")
 
     def getMapper(self):
         return self.mapper

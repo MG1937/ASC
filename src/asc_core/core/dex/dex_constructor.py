@@ -304,6 +304,9 @@ class DexHollower:
         if static_values_off != 0:
             # which may never be executed, I tried many way to compile a java file contains static fields to dex, never meet static_value_off > 0
             # but LLM still generate this parse, IDK why.. 20260729
+            # AOSP framework.jar android.content.Context trigged it, and lead to a very serviously bug!! 20260912
+            # this bug caused all field assignments to be misaligned!
+            # this PR try to fix it https://github.com/MG1937/ASC/pull/8/changes/462b0c3377e33f82e8284315a2bcc35e78c42084
             self.static_values_elements = parse_encoded_array(self._raw_cache, static_values_off, self.hlw_strs, self.hlw_types, self.hlw_fields, self.hlw_methods)
         if self.debug: t_static = time.perf_counter()
             
