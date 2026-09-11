@@ -78,12 +78,25 @@ fn run() -> Result<()> {
     match args.command {
         Command::Findrefs(args) => {
             let query = args.query()?;
+            let scan_started = Instant::now();
             let mut lines = apk::find_references(&args.apk_path, &query, args.threads, args.debug)?;
+            let scanned = scan_started.elapsed();
             lines.sort();
+            let sorted = scan_started.elapsed();
             let mut payload = String::new();
             for line in lines {
                 payload.push_str(&line);
                 payload.push('\n');
+            }
+            if args.debug {
+                eprintln!(
+                    "[findrefs] rows={} scan={:.2} ms sort={:.2} ms assemble={:.2} ms payload={} MiB",
+                    payload.lines().count(),
+                    scanned.as_secs_f64() * 1e3,
+                    (sorted - scanned).as_secs_f64() * 1e3,
+                    (scan_started.elapsed() - sorted).as_secs_f64() * 1e3,
+                    payload.len() / (1 << 20)
+                );
             }
             emit(&payload, args.output_path())?;
             if args.debug {
