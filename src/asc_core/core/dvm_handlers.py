@@ -45,6 +45,28 @@ class IndexHandler(DvmHandler):
             return new_idx
         return rev[origin_idx]
 
+    def add_index(self, idx_type, origin_idx):
+        """Pin origin_idx to a deterministic new index (idempotent)."""
+        rev = self.reverse_mapper[idx_type]
+        if origin_idx not in rev:
+            fwd = self.mapper[idx_type]
+            new_idx = len(fwd)
+            fwd[new_idx] = origin_idx
+            rev[origin_idx] = new_idx
+        return rev[origin_idx]
+
+    def preregister_own_fields(self, fields):
+        """Pin this class's own declared fields to the leading new field
+        indices, ordered by original field_idx ascending.
+
+        This is the single definition of the field declaration order: it makes
+        bytecode operands (rewritten here), the rebuilt field table
+        (DexIndexMapper), the class_data declaration (DexBuilder) and the
+        static_values encoded_array all follow the same original-index order,
+        so field initializers stay aligned with their fields."""
+        for field_obj in sorted(fields, key=lambda f: f.index):
+            self.add_index("FIELD", field_obj.index)
+
     def getMapper(self):
         return self.mapper
 
