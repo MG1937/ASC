@@ -1,5 +1,6 @@
 from findrefs.locator.base_locator import BaseLocator
 import struct
+from utils.leb128 import read_uleb128_len
 import re
 import time
 
@@ -23,13 +24,23 @@ class StringLocator(BaseLocator):
         string_ids_off, string_ids_size = self.header.strings
         stridx_map = self.stridx_map
         buf = self.buf
+        if not string_ids_size:
+            self.parsed = True
+            self._debug_log("build_map", t_start, 0)
+            return
         # might buggy.. r8 not specify the first string data off is the begging of all string data off, but usually it was...
         self.strdata_start = _STRUCT_I.unpack_from(buf, string_ids_off)[0]
         for idx in range(string_ids_size):
             data_offset = _STRUCT_I.unpack_from(buf, string_ids_off)[0]
             string_ids_off += 4
             stridx_map[data_offset] = idx
-        self.strdata_end = data_offset
+        # Include the final string_data_item. The existing lookup maps a
+        # match through the following string offset, so add an end sentinel
+        # for the final item without changing that mapping scheme.
+        self.strdata_end = buf.obj.find(
+            b'\x00', data_offset + read_uleb128_len(buf, data_offset)
+        ) + 1
+        stridx_map[self.strdata_end] = string_ids_size
         self.parsed = True
         self._debug_log("build_map", t_start, len(stridx_map))
 
