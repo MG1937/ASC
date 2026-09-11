@@ -37,13 +37,27 @@ Java 类名也接受 Dalvik 类名，并通过原生 Rust 反编译器输出 Jav
 ## 验证
 
 ```sh
+# 含 tests/self_contained.rs：生产代码不得派生进程、依赖清单不得出现 Python/JVM 绑定
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+
+# 需要一份真实 APK：检查 CLI 契约（退出码与输出、-o 文件与 stdout 一致、
+# --debug 只写 stderr、缺失类走错误路径）
+bash bench/contracts.sh app.apk target/release/rasc
+
+# 需要原 Python ASC 检出与其环境：对任意 APK 做与原实现的 parity 对比
+# （类集合、字面量查询行集合必须一致；manifest 比较内容而非格式）
+RASC_BIN=target/release/rasc REF_ROOT=/path/to/reference REF_PY=/path/to/python \
+  python3 bench/corpus_parity.py app.apk [more.apk ...]
+
+# 健壮性：确定性损坏一个 APK（截断/翻转/DEX 头/中央目录/manifest）并要求
+# rasc 干净报错而不是 panic（退出码不得为崩溃值）
+RASC_BIN=target/release/rasc python3 bench/mutation_check.py app.apk 200
 ```
 
 ## 性能
 
 见 [PERFORMANCE.md](PERFORMANCE.md)：在 343 MiB 生产 APK 的 11 个真实场景上，相对原
-Python ASC 的几何平均加速为 5.5×；可用 `bench/compare_vs_reference.py` 复现。
-该对比测于早前版本（rasc 主指标 120–130 ms）；此后 rasc 自身主指标降到 110 ms，
-因此实际加速比只会更高。
+Python ASC 的几何平均加速为 **5.7–5.8×**；可用 `bench/compare_vs_reference.py` 复现（三项
+仓库内检查见下：CLI 契约、与原实现的逐 APK parity、畸形输入健壮性）。

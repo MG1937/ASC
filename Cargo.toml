@@ -24,3 +24,9 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# axmldecoder 0.5.0 panics on manifests whose string pool uses the extended length
+# forms, which real APKs do. The vendored copy implements them; see
+# vendor/axmldecoder/PATCHES.md.
+[patch.crates-io]
+axmldecoder = { path = "vendor/axmldecoder" }

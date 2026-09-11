@@ -73,8 +73,6 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 [[package]]
 name = "axmldecoder"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c837020c555ea97afbcc1b9514691de349413a9b054ef6a83bf38ed881fd14a7"
 dependencies = [
  "byteorder",
  "deku",

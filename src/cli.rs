@@ -1,3 +1,4 @@
+use crate::query::{ClassQuery, MemberQuery, Query, format_class_name, fuzzy_class_pattern};
 use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -114,72 +115,14 @@ impl MemberArgs {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
-        let class = self
-            .class_name
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|value| {
-                if self.fuzzy_class {
-                    ClassQuery::Fuzzy(value.replace('.', "/"))
-                } else {
-                    ClassQuery::Exact(format_class_name(value).expect("nonempty class"))
-                }
-            });
+        let class = match self.class_name.as_deref().filter(|name| !name.is_empty()) {
+            None => None,
+            Some(name) if self.fuzzy_class => Some(ClassQuery::Fuzzy(fuzzy_class_pattern(name))),
+            Some(name) => Some(ClassQuery::Exact(format_class_name(name)?)),
+        };
         if name.is_none() && class.is_none() {
             bail!("{kind} query needs at least one of class or {kind} name");
         }
         Ok(MemberQuery { name, class })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum Query {
-    String(String),
-    Type(String),
-    Method(MemberQuery),
-    Field(MemberQuery),
-}
-
-#[derive(Clone, Debug)]
-pub struct MemberQuery {
-    pub name: Option<String>,
-    pub class: Option<ClassQuery>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ClassQuery {
-    Exact(String),
-    Fuzzy(String),
-}
-
-pub fn format_class_name(name: &str) -> Result<String> {
-    if name.is_empty() {
-        bail!("Class name cannot be empty");
-    }
-    if name.starts_with('L') && name.ends_with(';') {
-        return Ok(name.to_owned());
-    }
-    let mut name = name.replace('.', "/");
-    if !name.starts_with('L') {
-        name.insert(0, 'L');
-    }
-    if !name.ends_with(';') {
-        name.push(';');
-    }
-    Ok(name)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalizes_class_names() {
-        assert_eq!(format_class_name("com.foo.Main").unwrap(), "Lcom/foo/Main;");
-        assert_eq!(
-            format_class_name("Lcom/foo/Main;").unwrap(),
-            "Lcom/foo/Main;"
-        );
-        assert!(format_class_name("").is_err());
     }
 }
