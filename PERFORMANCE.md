@@ -208,6 +208,31 @@ libdeflate 的一次性 API 在输出缓冲不足时**不发布已写出的字�
 `findrefs`/`getclass` 对照路径不变 ✓。输出在 8 项调用（含过滤、`--threads 1/4/8`、两个语料包）上
 与改前逐字节一致 ✓，跨线程输出仍确定 ✓。
 
+## 内存占用（2026-09-12 实测）
+
+`/usr/bin/time -l` 的峰值 RSS（macOS 的 `ru_maxrss` 含子进程，所以参考实现的 JVM/jadx 会被计入 ✓），
+343 MiB 基准包、`--threads 8`、中位 3 次：
+
+| 场景 | rasc | 参考实现 | 比值 |
+|---|---:|---:|---:|
+| `findrefs string Authorization` | 343 MiB | 220 MiB | **0.64×**（rasc 更费 ✗） |
+| `findrefs field INSTANCE`（170,923 行） | 364 MiB | 239 MiB | **0.66×** ✗ |
+| `getclass` 早期类 | 105 MiB | 208 MiB | **1.98×** ✓ |
+| `getclass` 晚期类 | 151 MiB | 425 MiB | **2.82×** ✓ |
+| `manifest` | 8 MiB | 16 MiB | **1.97×** ✓ |
+| `classes`（参考实现无此命令） | 233 MiB | — | — |
+
+`findrefs` 上 rasc 更费，原因是**用内存换并行度**：8 个 worker 各持一份在飞的整份 DEX（≤ ~11 MiB），
+加上整个 APK 的 mmap 页被读到（文件页、可回收 ✓）、以及 `map_dex_entries` 的"每条目一个 `Vec<T>`
+再展平成一个列表"（展平期同时持有两份类表 ✓）。峰值随线程数上升：
+
+| `findrefs field INSTANCE` | `--threads 1` | 4 | 8 | 12 |
+|---|---:|---:|---:|---:|
+| 峰值 RSS | 262 MiB | 303 MiB | 378 MiB | 425 MiB |
+
+`classes` 反而是 1 线程高（**453 MiB**），≥2 线程就回到 215–243 MiB——这是 macOS 分配器在单线程下
+的高水位特性，不是可回收的内存泄漏 ✓；内存敏感时用 `--threads ≥ 2`（默认就是 8 ✓）。
+
 ## 复现
 
 需要本仓库、一份参考实现 的检出，以及装有 `androguard` 的 Python 环境：
