@@ -1,0 +1,7 @@
+/target/
+*.apk
+*.dex
+*.jar
+*.zip
+.DS_Store
+/.auto/

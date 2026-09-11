@@ -1,0 +1,27 @@
+[package]
+name = "rasc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+description = "Native Rust rewrite of the reference implementation"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+axmldecoder = "0.5"
+clap = { version = "4.6", features = ["derive"] }
+droidsaw-dex = "2.0.0"
+libdeflater = "1.26"
+memchr = "2.7"
+memmap2 = "0.9"
+rayon = "1.12"
+regex = "1.12"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
