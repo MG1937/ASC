@@ -270,8 +270,8 @@ class DexBuilder:
             # so code sorted every static field and methods, if the list is ordered by idx, there is no way to have diff idx invalid issue.
             # however the sort behavior cause the static_fields we collected do not match the order of current static_fields ready to writen.
             # fixed by pin class's own fields before remap fields used by bytecodes
-            
-            # count            
+
+            # count
             s_f = sorted([f for f in self.im.fields_obj if f.is_static], key=lambda f: self.im.field_restruct_idx.get(f.index, 0))
             i_f = sorted([f for f in self.im.fields_obj if not f.is_static], key=lambda f: self.im.field_restruct_idx.get(f.index, 0))
             d_m = sorted([m for m in self.im.methods_obj if m.is_virtual == False], key=lambda m: self.im.method_restruct_idx.get(m.index, 0))
