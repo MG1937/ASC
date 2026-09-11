@@ -65,9 +65,8 @@ def split_rows(lines: set[str]) -> tuple[dict[str, str], int]:
 
     A row reads `<dex> | <class>-><method> | matched=(<text>)`. The reference
     implementation prints the matched text verbatim, so a string constant that
-    spans lines arrives as extra fragment lines and the text itself is cut short
-    (both documented in PERFORMANCE.md); those lines have no identity and are
-    counted separately.
+    spans lines arrives as extra fragment lines and the text itself is cut short;
+    those lines have no identity and are counted separately.
     """
     identities: dict[str, str] = {}
     fragments = 0
@@ -91,8 +90,8 @@ def reference_truncation(theirs: str, ours: str) -> bool:
 
 
 # Broad sweep across all four modes. The reference locator is a byte regex with no
-# instruction-boundary check, so it reports *extra* rows here (documented in
-# PERFORMANCE.md). The sweep check is therefore one-directional: rasc must never
+# instruction-boundary check, so it reports *extra* rows here.
+# The sweep check is therefore one-directional: rasc must never
 # report a row the reference misses, and the extras are only counted.
 SWEEP_QUERIES = [
     "string http",

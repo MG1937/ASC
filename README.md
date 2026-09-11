@@ -1,106 +1,117 @@
 # rasc
 
-原生 Rust 实现的 APK/DEX 分析 CLI。二进制运行时不依赖 Python、Androguard、JADX 或 JVM。
+[中文说明](README.zh-CN.md)
 
-## 构建
+## What rasc is
+
+rasc is a Rust re-implementation of ASC: an APK/DEX analysis tool **built as an experiment,
+but usable in practice**. It explores native performance and the ability of coding agents
+to refactor code and optimize performance toward clearly defined goals.
+
+Most implementation and iteration are carried out by agents using ASC as a reference,
+with occasional human intervention. It is both a working tool and an exercise in
+agent-driven development, not a claim of fully autonomous software generation.
+
+## rasc is CLI-only
+
+For testing purposes, rasc stays simple: CLI only, optimized for agent workflows, with
+no GUI.
+
+## Performance and trade-offs
+
+Across 11 test scenarios on a 343 MiB APK, rasc achieves a geometric mean speedup of
+**8.0×** over ASC. Detailed measurements are included below.
+
+That speed is not free. Optimization has led some of rasc's designs away from ASC;
+it is no longer a line-by-line translation. It favors throughput and is willing to spend
+more memory for speed: multithreaded reference searches, for example, have a higher peak
+memory footprint than ASC. This is a trade-off, not a claim of lower resource use everywhere.
+
+The speedup should first be understood in the context of moving from Python to a native
+Rust implementation—not as proof that Rust beats other languages or that agents beat
+human developers. Algorithms, parallelism, and memory strategies also affect the result.
+An implementation in Zig or C++ might go further.
+
+<details>
+<summary>Benchmark results, memory usage, and reproduction</summary>
+
+### Test conditions
+
+- Apple M3 Pro (6 performance + 6 efficiency cores), 36 GiB RAM, macOS 26.5.1.
+- ASC: CPython 3.12.14, Androguard 4.1.4. rasc: Rust release build with FatLTO.
+- Input: 56 root DEXes, 567,192 classes. Both implementations use 8 workers.
+- End-to-end wall time: fresh process per sample, randomized execution order, median of
+  at least 3 runs. Output is discarded, but formatting and writing are included.
+- Exit status and output are checked before timing; result sets are compared where applicable.
+
+### Execution time
+
+| Scenario | rasc | ASC | Speedup |
+|---|---:|---:|---:|
+| `findrefs string Authorization` | 117 ms | 830 ms | 7.1× |
+| `findrefs string okhttp` | 121 ms | 880 ms | 7.3× |
+| `findrefs type Gson` | 141 ms | 1,292 ms | 9.1× |
+| `findrefs method onCreate` | 178 ms | 1,620 ms | 9.1× |
+| `findrefs method onCreate --class androidx --fuzzy-class` | 140 ms | 1,604 ms | 11.5× |
+| `findrefs field INSTANCE` | 191 ms | 1,978 ms | 10.4× |
+| `getclass` early class (`classes.dex`) | 45 ms | 124 ms | 2.7× |
+| `getclass` late class (`classes56.dex`) | 77 ms | 259 ms | 3.4× |
+| `getclass` missing class | 62 ms | 245 ms | 4.0× |
+| `manifest` | 13 ms | 268 ms | 20.3× |
+| `classes` | 98 ms | 2,318 ms | 23.7× |
+| **Geometric mean** | | | **8.0×** |
+
+ASC has no CLI command for `manifest` or `classes`; the benchmark calls the underlying
+functions used by its GUI. Search semantics also differ: rasc uses literal queries and
+instruction-boundary scanning, so arbitrary queries need not produce identical results.
+
+### Memory
+
+Peak RSS on the same APK with 8 workers:
+
+| Scenario | rasc | ASC |
+|---|---:|---:|
+| `findrefs string Authorization` | 343 MiB | 220 MiB |
+| `findrefs field INSTANCE` | 364 MiB | 239 MiB |
+| `getclass` early / late | 105 / 151 MiB | 208 / 425 MiB |
+| `manifest` | 8 MiB | 16 MiB |
+| `classes` | 233 MiB | Not measured |
+
+rasc uses more memory for parallel reference searches, but less for class decompilation
+and manifest decoding in these measurements. Reducing workers trades speed for memory:
+a separate `findrefs field INSTANCE` run with `--threads 2` used 256 MiB and remained
+3.3× faster than ASC.
+
+### Reproduce
+
+Build rasc with `cargo build --release`. Set `RASC_BIN`, `APK`, `REF_ROOT`, and `REF_PY`
+to absolute paths; `REF_PY` must point to a Python environment with ASC's dependencies.
+
+```sh
+APK=/path/to/app.apk RASC_BIN=/path/to/rasc/target/release/rasc \
+  REF_ROOT=/path/to/ASC REF_PY=/path/to/venv/bin/python \
+  THREADS=8 python3 bench/compare_vs_reference.py
+```
+
+</details>
+
+## Build
 
 ```sh
 cargo build --release
+./target/release/rasc --help
 ```
 
-## 命令行
+## Usage
 
 ```sh
-# 定位并反编译一个类
-rasc getclass app.apk com.example.Main
+rasc getclass app.apk com.example.Main                 # one class -> Java-like source
 rasc getclass --threads 16 -o Main.java app.apk 'Lcom/example/Main;'
-
-# 在所有根 DEX 中查找指令引用
-rasc findrefs app.apk string Authorization
-rasc findrefs app.apk type com.example.Model
+rasc findrefs app.apk string Authorization             # references across every root DEX
 rasc findrefs app.apk method onCreate --class com.example.Main
 rasc findrefs app.apk field INSTANCE --class example --fuzzy-class
-
-# 列出或过滤已定义的类
-rasc classes app.apk
-rasc classes --filter com.example --threads 16 app.apk
-rasc classes --debug app.apk            # 阶段耗时打印到 stderr
-
-# 解码二进制 AndroidManifest.xml
-rasc manifest app.apk
-rasc manifest -o AndroidManifest.xml app.apk
+rasc classes app.apk                                   # class index
+rasc manifest app.apk                                  # binary AndroidManifest.xml -> XML
 ```
 
-`findrefs` 把查询文本当作字面子串做模糊匹配，支持 DEX MUTF-8，并行扫描多 DEX APK，
-并输出确定性的引用行。DEX 041 逻辑容器会被归一化为可独立搜索的视图；`getclass` 既接受
-Java 类名也接受 Dalvik 类名，并通过原生 Rust 反编译器输出 Java 风格源码。
-
-## 验证
-
-```sh
-# 含 tests/self_contained.rs：生产代码不得派生进程、依赖清单不得出现 Python/JVM 绑定
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
-
-# 需要一份真实 APK：检查 CLI 契约（退出码与输出、-o 文件与 stdout 一致、
-# --debug 只写 stderr、缺失类走错误路径）
-bash bench/contracts.sh app.apk target/release/rasc   # 含点号/斜杠描述符一致性门禁
-
-# 需要原 Python ASC 检出与其环境：对任意 APK 做与原实现的 parity 对比
-# （类集合、字面量查询行集合必须一致；manifest 比较内容而非格式）
-# 脚本需要 Python 3.10+（系统 python3 可能是 3.9）
-RASC_BIN=target/release/rasc REF_ROOT=/path/to/reference REF_PY=/path/to/python \
-  python3 bench/corpus_parity.py app.apk [more.apk ...]
-
-# 健壮性：确定性损坏一个 APK（截断/翻转/DEX 头/中央目录/manifest）并要求
-# rasc 干净报错而不是 panic（退出码不得为崩溃值）
-RASC_BIN=target/release/rasc python3 bench/mutation_check.py app.apk 200
-
-# 退化 ZIP 形态（随机变异构造不出来的那些）由单元测试固定：ZIP64 占位符、
-# 中央目录越界、name_len 越界、缺 EOCD 都必须干净报错；拼接归档取末个 EOCD、
-# 数据描述符标志按中央目录尺寸解析
-
-# 反编译对照（以 JADX 为准）：比较 rasc 与 JADX 的字符串字面量集合，只在 JADX
-# 输出干净且类身份一致时判定；缺失的字面量 = rasc 漏译（需要 PATH 上有 jadx）
-RASC_BIN=target/release/rasc python3 bench/jadx_parity.py app.apk --sample 20
-
-# 行级仲裁：用 Androguard 的指令解码逐行判断参考实现多出的行属于哪种过度报告
-# （字节级假阳性 / 它把整个 class->member 当匹配对象），并把"真实指令引用的成员名
-# 命中"计为 rasc 漏报 —— 参考实现不是基准真值，这个脚本才是仲裁者
-RASC_BIN=target/release/rasc REF_ROOT=/path/to/reference REF_PY=/path/to/python \
-  python3 bench/row_oracle.py app.apk "field INSTANCE" 100
-
-# 反编译等价性：vendored droidsaw-dex 补丁（只解析目标类）必须与未打补丁的
-# 二进制输出逐字节一致；按 DEX 分层抽样
-RASC_BIN=target/release/rasc SAMPLE=1200 \
-  python3 bench/decompile_equivalence.py /path/to/unpatched-rasc app.apk
-```
-
-## 架构
-
-| 模块 | 职责 |
-|---|---|
-| `src/main.rs` | CLI 入口：分发子命令、统一输出（`-o` 与 stdout 同一份字节，`--debug` 只写 stderr） |
-| `src/cli.rs` | 参数定义与校验（clap） |
-| `src/query.rs` | 查询模型与类名归一化，`cli` 与各分析层共用 |
-| `src/zip.rs` | 手写中央目录解析；全量解压走 libdeflate，字符串类命令走**流式前缀解压**（系统 zlib，解到够用即停）；重名条目与退化形态在此处理 |
-| `src/dex/` | DEX 读取与引用扫描（`mod`）、opcode 宽度/种类表（`opcodes`）、操作数预筛（`filter`）、MUTF-8（`mutf8`）、041 容器（`container`）、**前缀读取**（`prefix`，只读头部/id 表/class_def/string 段，不足即回退） |
-| `src/apk.rs` | 编排：条目调度（rayon，支持命中即早退）与 `findrefs`/`classes`/`getclass` 入口 |
-| `src/manifest.rs` | 二进制 AXML → XML |
-| `src/bytes.rs` | 有界小端读取 |
-
-依赖方向只向下：`main -> {cli, apk, manifest, query}`、`cli -> query`、`apk -> {query, dex, zip}`、
-`dex -> query`。引用搜索不经过反编译依赖，只有 `getclass` 用 `droidsaw-dex`。
-
-`vendor/` 下是两个带补丁的第三方 crate，各带 `PATCHES.md`：`axmldecoder`（字符串池扩展长度、
-CDATA 崩溃）与 `droidsaw-dex`（只解析目标类、跳过只有 emit 消费的工作、字符串池并行解码）。两者的行为都由仓库内
-测试与 bench 脚本守着；上游若接受这些改动（`vendor/droidsaw-dex/UPSTREAM.md` 是现成的请求文本），
-vendor 目录即可删除。
-
-## 性能
-
-见 [PERFORMANCE.md](PERFORMANCE.md)：在 343 MiB 生产 APK 的 11 个真实场景上，相对参考实现的
-几何平均加速为 **8.0×**（引用搜索 7.1–11.5×、`classes` 23.7×、`manifest` 20.3×、`getclass` 2.7–4.0×）；
-可用 `bench/compare_vs_reference.py` 复现。上面「验证」一节里的脚本覆盖 CLI 契约、逐 APK parity、
-畸形输入健壮性、反编译与参考实现的逐行仲裁 —— 全部可在仓库内复现。
+See `rasc --help` for more usage information, or `rasc <command> --help` for command-specific options.
