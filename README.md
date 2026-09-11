@@ -59,6 +59,10 @@ RASC_BIN=target/release/rasc python3 bench/mutation_check.py app.apk 200
 # 中央目录越界、name_len 越界、缺 EOCD 都必须干净报错；拼接归档取末个 EOCD、
 # 数据描述符标志按中央目录尺寸解析
 
+# 反编译对照（以 JADX 为准）：比较 rasc 与 JADX 的字符串字面量集合，只在 JADX
+# 输出干净且类身份一致时判定；缺失的字面量 = rasc 漏译（需要 PATH 上有 jadx）
+RASC_BIN=target/release/rasc python3 bench/jadx_parity.py app.apk --sample 20
+
 # 行级仲裁：用 Androguard 的指令解码逐行判断参考实现多出的行属于哪种过度报告
 # （字节级假阳性 / 它把整个 class->member 当匹配对象），并把"真实指令引用的成员名
 # 命中"计为 rasc 漏报 —— 参考实现不是基准真值，这个脚本才是仲裁者

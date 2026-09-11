@@ -107,6 +107,15 @@ rasc 搜索时间的实际构成（用 `--debug` 采集全部 56 个 DEX 的分�
   一个坏条目说明归档与它声称的不符，静默按"其余部分"分析会掩盖"有一部分从未被分析"这件事。参考实现的
   findrefs 同样报错（消息不同），但它的类查找路径会静默跳过 magic 损坏的条目，两条路径行为不一致。四个
   形态（全垃圾、截断、magic 损坏、空条目）都有实测记录，且由单测固定（`an_entry_that_is_not_a_dex_is_a_clean_error`）。
+* **与 JADX 的对照（反编译源码以 JADX 为准）**：`bench/jadx_parity.py` 把 JADX 当权威，逐类比较
+  字符串字面量集合；只在 JADX 自身输出干净（无 bad-code 标记）**且类身份一致**时才判定 rasc（JADX 的
+  `--single-class` 会把 `$Inner` 解析成外部类，缺这层校验就会误报）。在一个 124 DEX / 139,503 类的
+  真实 `services.jar` 抽样上 rasc 与 JADX 一致，唯一确认的差异是
+  `com.android.server.DiskStatsService#reportFreeSpace`：JADX 的 `catch (IllegalArgumentException)`
+  分支里有 `pw.print("-Error: ")`，rasc（droidsaw 反编译器）漏掉了该分支语句。用**未打 vendored 补丁的
+  旧二进制**复验：该差异与 rasc 的按类解析无关，属反编译器自身的完整性缺口。
+  同时 JADX 在框架代码上自身局限明显（同一个 `ActiveServices` 有 295 处 bad-code 标记、8 个错误，大量
+  `$$ExternalSyntheticLambda*` 无法反编译），所以对照必须先把这些类排除。
 * **取值渲染的正确性优先**：未知/保留的 AXML 取值类型不再让整篇 manifest 解码失败，而是渲染
   `<0x.., type 0x..>`（修复前整篇失败，等于丢数据）；radix 倍数与保留类型的处理**故意不跟**参考实现
   的近似或猜测（见上）。`defines_class` 也按每个 `class_def` 自己的 type id 解析描述符，因此重复
