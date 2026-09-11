@@ -202,6 +202,19 @@ class DexIndexMapper:
 
         self._fill_data_types()
 
+        # === CLASS FIELD IDX  ===
+        for field_obj in sorted(self.fields_obj, key=lambda f: f.index):
+            if field_obj.index in self.field_restruct_idx:
+                continue
+            fld_clz_string = field_obj.cls.fullname
+            fld_clz_typeidx = self._append_string_to_types(fld_clz_string)
+            fld_type_string = self._type_to_descriptor(field_obj.type)
+            fld_type_typeidx = self._append_string_to_types(fld_type_string)
+            fld_name_string = field_obj.name
+            fld_name_stridx = self._add_str_restruct(fld_name_string)
+            new_field = [fld_clz_typeidx, fld_type_typeidx, fld_name_stridx]
+            self._add_field_restruct(new_field, field_obj.index)
+
         # === FIELD IDX ===
         for i in range(len(self.mapper["FIELD"])):
             if i in self.mapper["FIELD"]:

@@ -59,6 +59,9 @@ class DexManager:
         dvminterp = DvmInterpreter()
         dvminterp.addHandler(idx_handler)
 
+        # Pin own-field declaration order before any bytecode is rewritten.
+        idx_handler.preregister_own_fields(clazz.fields)
+
         modified_bytecodes = {}
         
         t_setup_end = time.perf_counter()
