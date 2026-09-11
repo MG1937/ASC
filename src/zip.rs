@@ -69,7 +69,8 @@ pub(crate) fn parse_zip_entries(
     Ok(entries)
 }
 
-pub(crate) fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
+/// The compressed bytes of `entry`, with the local header skipped.
+fn compressed_slice<'a>(data: &'a [u8], entry: &ZipEntry) -> Result<&'a [u8]> {
     let offset = entry.local_header_offset;
     if data.get(offset..offset + 4) != Some(b"PK\x03\x04") {
         bail!("bad local header for {}", entry.name);
@@ -80,7 +81,76 @@ pub(crate) fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
     let end = start
         .checked_add(entry.compressed_size)
         .context("compressed range overflow")?;
-    let compressed = data.get(start..end).context("bad compressed range")?;
+    data.get(start..end).context("bad compressed range")
+}
+
+/// What an incremental prefix inflate should do after each chunk.
+pub(crate) enum PrefixStep {
+    /// Keep going until at least this many bytes are present (0 = "not enough
+    /// information yet, ask again after the next chunk").
+    Continue(usize),
+    /// Give up on the prefix: the caller inflates the whole entry instead.
+    Abort,
+}
+
+/// Decompresses `entry` incrementally, letting `decide` stop it.
+///
+/// `decide` sees the bytes produced so far and returns how much further to go (or
+/// that the prefix is not worth it). The stream is decoded on the fly - system zlib
+/// rather than libdeflate - so the caller can stop as soon as its decision is safe
+/// and never pays for the code section. Returns `(bytes, finished)`; `finished` is
+/// false when the caller aborted, in which case the bytes so far are still exact.
+pub(crate) fn inflate_until(
+    data: &[u8],
+    entry: &ZipEntry,
+    mut decide: impl FnMut(&[u8]) -> PrefixStep,
+) -> Result<(Vec<u8>, bool)> {
+    if entry.compression != 8 {
+        return Ok((inflate_entry(data, entry)?, true));
+    }
+    const CHUNK: usize = 1 << 18;
+    let compressed = compressed_slice(data, entry)?;
+    let mut decompressor = flate2::Decompress::new(false);
+    let mut output: Vec<u8> = Vec::new();
+    let mut target: Option<usize> = None;
+    loop {
+        let base = output.len();
+        output.resize(base + CHUNK, 0);
+        let consumed = decompressor.total_in() as usize;
+        let status = decompressor
+            .decompress(
+                compressed.get(consumed..).context("compressed range")?,
+                &mut output[base..],
+                flate2::FlushDecompress::None,
+            )
+            .with_context(|| format!("inflate prefix of {}", entry.name))?;
+        let written = decompressor.total_out() as usize - base;
+        output.truncate(base + written);
+        if target.is_none() {
+            match decide(&output) {
+                // 0 means the caller needs more bytes before it can decide, so ask
+                // again after the next chunk rather than committing to a target.
+                PrefixStep::Continue(0) => {}
+                PrefixStep::Continue(limit) => target = Some(limit.min(entry.uncompressed_size)),
+                PrefixStep::Abort => return Ok((output, false)),
+            }
+        }
+        if let Some(limit) = target
+            && output.len() >= limit
+        {
+            return Ok((output, status == flate2::Status::StreamEnd));
+        }
+        if status == flate2::Status::StreamEnd {
+            return Ok((output, true));
+        }
+        if written == 0 && decompressor.total_in() as usize == consumed {
+            bail!("deflate made no progress for {}", entry.name);
+        }
+    }
+}
+
+pub(crate) fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
+    let compressed = compressed_slice(data, entry)?;
     match entry.compression {
         0 => {
             if compressed.len() != entry.uncompressed_size {

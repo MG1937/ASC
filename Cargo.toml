@@ -10,6 +10,7 @@ license = "Apache-2.0"
 anyhow = "1.0"
 axmldecoder = "0.5"
 clap = { version = "4.6", features = ["derive"] }
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
 droidsaw-dex = "2.0.0"
 libdeflater = "1.26"
 memchr = "2.7"

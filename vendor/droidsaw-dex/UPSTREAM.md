@@ -69,3 +69,10 @@ one, and the patched lines are marked `PATCHED (rasc)`), plus `parse_for_class`'
 fallback for unmatched descriptors. The repository's tests and
 `bench/decompile_equivalence.py` pin the behaviour, so we can drop the directory as
 soon as upstream supports either entry point.
+
+## 3. Optional: decode the string pool in parallel
+
+`parse_string_pool` is a plain sequential loop over independent entries (our vendored
+copy runs it through `rayon` with an ordered collect, keeping the first-error
+semantics). On a 9.8 MiB DEX that is 9.4 ms of a ~24 ms class-scoped parse; upstreaming
+it would let us drop that patch too.

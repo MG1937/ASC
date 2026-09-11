@@ -58,3 +58,10 @@ in its output. Three layers guard the claim:
 `UPSTREAM.md` in this directory is the ready-to-file request for both changes
 (measurements included). Once upstream grows a public parse scope — or accepts the
 0x78-byte DEX 041 header — this vendor directory should be dropped in favour of it.
+
+## 3. `parse_string_pool` decodes the pool in parallel
+
+The entries are independent, and rayon's ordered collect keeps the first error
+(lowest index) winning, so behaviour is unchanged while the pool decodes on every
+core. Measured on a 9.8 MiB DEX: 9.4 ms -> sub-millisecond for a class-scoped parse,
+which is most of what a `getclass` scoped parse still spent.

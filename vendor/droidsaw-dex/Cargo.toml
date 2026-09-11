@@ -60,6 +60,9 @@ version = "2.0.1"
 [dependencies.droidsaw-common]
 version = "2"
 
+[dependencies.rayon]
+version = "1"
+
 [dependencies.rustc-hash]
 version = "2.1"
 

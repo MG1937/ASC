@@ -13,8 +13,10 @@ use crate::zip::{ZipEntry, inflate_entry};
 use anyhow::{Context, Result, bail};
 use memmap2::Mmap;
 use rayon::prelude::*;
+use std::cell::OnceCell;
 use std::fs::File;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -45,11 +47,44 @@ impl ClassEntry {
     }
 }
 
+/// One entry's bytes, inflated on first use.
+///
+/// Inflating lazily is what lets a string-only command (the class index) read a
+/// prefix instead of the whole entry: the prefix path never touches [`Self::data`],
+/// so the code section - two thirds of a DEX - is never decompressed.
 struct InflatedDex<'a> {
     entry: &'a ZipEntry,
-    data: Vec<u8>,
+    apk: &'a [u8],
     started: Instant,
-    inflate_elapsed: Duration,
+    data: OnceCell<(Vec<u8>, Duration)>,
+}
+
+impl InflatedDex<'_> {
+    /// The whole entry, inflating it on first use.
+    fn data(&self) -> Result<&[u8]> {
+        if self.data.get().is_none() {
+            let started = Instant::now();
+            let bytes = inflate_entry(self.apk, self.entry)?;
+            let _ = self.data.set((bytes, started.elapsed()));
+        }
+        Ok(&self.data.get().expect("filled above").0)
+    }
+
+    /// Time spent inflating, once it happened.
+    fn inflate_elapsed(&self) -> Duration {
+        self.data
+            .get()
+            .map_or(Duration::ZERO, |(_, elapsed)| *elapsed)
+    }
+
+    /// Incremental prefix inflation with a decision callback; see
+    /// [`crate::zip::inflate_until`] and [`crate::zip::PrefixStep`].
+    fn inflate_until(
+        &self,
+        decide: impl FnMut(&[u8]) -> crate::zip::PrefixStep,
+    ) -> Result<(Vec<u8>, bool)> {
+        crate::zip::inflate_until(self.apk, self.entry, decide)
+    }
 }
 
 /// How [`map_dex_entries`] orders the entries it hands to the worker pool.
@@ -95,13 +130,11 @@ fn map_dex_entries<T: Send>(
                 if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                     return Ok(Vec::new());
                 }
-                let started = Instant::now();
-                let data = inflate_entry(&mmap, entry)?;
                 map(InflatedDex {
                     entry,
-                    data,
-                    started,
-                    inflate_elapsed: started.elapsed(),
+                    apk: &mmap,
+                    started: Instant::now(),
+                    data: OnceCell::new(),
                 })
             })
             .collect()
@@ -140,7 +173,7 @@ pub fn find_references(
 ) -> Result<Vec<String>> {
     let rows = map_dex_entries(path, threads, EntryOrder::SmallestFirst, None, |inflated| {
         let mut rows = Vec::new();
-        for logical in dex::container::logical_dexes(&inflated.entry.name, &inflated.data)? {
+        for logical in dex::container::logical_dexes(&inflated.entry.name, inflated.data()?)? {
             for row in dex::find_references(&logical.data, query)? {
                 rows.push(render_reference(&logical.name, &row));
             }
@@ -149,8 +182,9 @@ pub fn find_references(
             eprintln!(
                 "[APK] '{}' inflate={:.2} us process={:.2} us",
                 inflated.entry.name,
-                inflated.inflate_elapsed.as_secs_f64() * 1_000_000.0,
-                (inflated.started.elapsed() - inflated.inflate_elapsed).as_secs_f64() * 1_000_000.0
+                inflated.inflate_elapsed().as_secs_f64() * 1_000_000.0,
+                (inflated.started.elapsed() - inflated.inflate_elapsed()).as_secs_f64()
+                    * 1_000_000.0
             );
         }
         Ok(rows)
@@ -159,9 +193,14 @@ pub fn find_references(
 }
 
 pub fn list_classes(path: &Path, threads: usize) -> Result<Vec<ClassEntry>> {
+    // One probe decides the prefix policy for the whole archive (see PrefixPolicy).
+    let policy: OnceLock<PrefixPolicy> = OnceLock::new();
     let mut classes = map_dex_entries(path, threads, EntryOrder::Natural, None, |inflated| {
+        if let Some(entries) = prefix_class_entries(&inflated, &policy)? {
+            return Ok(entries);
+        }
         let mut classes = Vec::new();
-        for logical in dex::container::logical_dexes(&inflated.entry.name, &inflated.data)? {
+        for logical in dex::container::logical_dexes(&inflated.entry.name, inflated.data()?)? {
             for descriptor in dex::class_names(&logical.data)? {
                 classes.push(ClassEntry {
                     descriptor,
@@ -174,6 +213,121 @@ pub fn list_classes(path: &Path, threads: usize) -> Result<Vec<ClassEntry>> {
     classes.sort();
     classes.dedup_by(|left, right| left.descriptor == right.descriptor);
     Ok(classes)
+}
+
+/// What one probe of an archive's DEX told us about the whole archive.
+///
+/// DEX files in one APK come from the same build tool, so their layout is
+/// homogeneous: measured on a 343 MiB APK every entry needs 26-65% of its bytes for
+/// a string-only command, on a 243 MiB APK every entry needs 90-95%. One probe
+/// therefore decides for all of them, and entries that need almost everything skip
+/// the prefix path entirely instead of paying for a probe each.
+#[derive(Clone, Copy)]
+struct PrefixPolicy {
+    worth_it: bool,
+    needed_fraction: f64,
+}
+
+/// Whether this entry defines `descriptor`, answered from a prefix when possible.
+///
+/// Mirrors [`dex::prefix::defines_class`]'s `None` contract: the caller then runs the
+/// full path for this entry. The prefix path never inflates the code section, which is
+/// where a lookup for a class that lives elsewhere was spending all its time.
+fn prefix_defines_class(
+    inflated: &InflatedDex<'_>,
+    descriptor: &[u8],
+    policy: &OnceLock<PrefixPolicy>,
+) -> Result<Option<bool>> {
+    let Some((prefix, _)) = prefix_probe(inflated, policy)? else {
+        return Ok(None);
+    };
+    dex::prefix::defines_class(&prefix, descriptor)
+}
+
+/// A prefix of this entry, or `None` when the prefix path is not for it.
+///
+/// One probe per archive decides the policy (see [`PrefixPolicy`]); entries of an
+/// archive whose string data comes late - measured 90-95% of the bytes - skip the
+/// streaming decoder entirely rather than pay for a probe each.
+fn prefix_probe(
+    inflated: &InflatedDex<'_>,
+    policy: &OnceLock<PrefixPolicy>,
+) -> Result<Option<(Vec<u8>, bool)>> {
+    /// Below this there is nothing to win (the entry is small anyway).
+    const MIN_GAIN: usize = 256 * 1024;
+    /// Bytes kept beyond the last string offset, for the string's own data.
+    const SLACK: usize = 64 * 1024;
+    /// A prefix is only worth a slower decoder below this share of the entry.
+    const WORTH_BELOW: f64 = 0.70;
+
+    let size = inflated.entry.uncompressed_size;
+    if inflated.entry.compression != 8 || size <= MIN_GAIN {
+        return Ok(None);
+    }
+    if let Some(known) = policy.get()
+        && !known.worth_it
+    {
+        return Ok(None);
+    }
+    let probing = policy.get().is_none();
+    let (prefix, finished) = inflated.inflate_until(|out| {
+        if let Some(known) = policy.get()
+            && !probing
+        {
+            return crate::zip::PrefixStep::Continue(
+                (size as f64 * (known.needed_fraction + 0.15)).ceil() as usize + SLACK,
+            );
+        }
+        // A 041 container overlays a header per member and needs the whole address
+        // space, so the full path keeps handling those.
+        if out.get(..8) == Some(b"dex\n041\0") {
+            return crate::zip::PrefixStep::Abort;
+        }
+        match dex::prefix::string_data_end(out) {
+            Some(needed) => {
+                let fraction = needed as f64 / size as f64;
+                let worth_it = fraction < WORTH_BELOW;
+                let _ = policy.set(PrefixPolicy {
+                    worth_it,
+                    needed_fraction: fraction,
+                });
+                if worth_it {
+                    crate::zip::PrefixStep::Continue(needed + SLACK)
+                } else {
+                    crate::zip::PrefixStep::Abort
+                }
+            }
+            // The tables are not complete yet: keep going until they are.
+            None => crate::zip::PrefixStep::Continue(0),
+        }
+    })?;
+    Ok(Some((prefix, finished)))
+}
+
+/// The class index of a plain deflate DEX from a prefix of it.
+///
+/// `None` means "not applicable, or not provably complete": the caller then inflates
+/// the whole entry. `dex::prefix::class_names` answers only when the prefix holds all
+/// three tables and every descriptor it decodes, so a `Some` is exact, not a guess.
+fn prefix_class_entries(
+    inflated: &InflatedDex<'_>,
+    policy: &OnceLock<PrefixPolicy>,
+) -> Result<Option<Vec<ClassEntry>>> {
+    let Some((prefix, _)) = prefix_probe(inflated, policy)? else {
+        return Ok(None);
+    };
+    let Some(names) = dex::prefix::class_names(&prefix)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        names
+            .into_iter()
+            .map(|descriptor| ClassEntry {
+                descriptor,
+                dex_name: inflated.entry.name.clone(),
+            })
+            .collect(),
+    ))
 }
 
 /// A located class: the DEX entry that defines it and that entry's bytes.
@@ -194,13 +348,44 @@ pub fn find_class(
     debug: bool,
 ) -> Result<Option<ClassHit>> {
     let stop = AtomicBool::new(false);
+    // One probe decides the prefix policy for the archive (see PrefixPolicy).
+    let policy: OnceLock<PrefixPolicy> = OnceLock::new();
     let hits = map_dex_entries(
         path,
         threads,
         EntryOrder::SmallestFirst,
         Some(&stop),
         |inflated| {
-            for logical in dex::container::logical_dexes(&inflated.entry.name, &inflated.data)? {
+            // Entries that do not define the class only need the prefix, so the code
+            // section is never decompressed for them. `None` means "cannot tell".
+            match prefix_defines_class(&inflated, descriptor.as_bytes(), &policy)? {
+                Some(false) => {
+                    if debug {
+                        eprintln!(
+                            "[APK] '{}' hit=false total={:.2} us",
+                            inflated.entry.name,
+                            inflated.started.elapsed().as_secs_f64() * 1_000_000.0
+                        );
+                    }
+                    return Ok(Vec::new());
+                }
+                Some(true) => {
+                    stop.store(true, Ordering::Relaxed);
+                    if debug {
+                        eprintln!(
+                            "[APK] '{}' hit=true total={:.2} us",
+                            inflated.entry.name,
+                            inflated.started.elapsed().as_secs_f64() * 1_000_000.0
+                        );
+                    }
+                    return Ok(vec![ClassHit {
+                        dex_name: inflated.entry.name.clone(),
+                        data: inflated.data()?.to_vec(),
+                    }]);
+                }
+                None => {}
+            }
+            for logical in dex::container::logical_dexes(&inflated.entry.name, inflated.data()?)? {
                 if dex::defines_class(&logical.data, descriptor.as_bytes())? {
                     stop.store(true, Ordering::Relaxed);
                     if debug {
@@ -530,6 +715,31 @@ mod tests {
             hit.is_some(),
             "listed by classes but missing from find_class"
         );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn class_index_reads_041_containers_through_the_full_path() {
+        // The prefix reader refuses 041 containers (their members overlay headers),
+        // so this pins that the fallback still lists every logical member.
+        let container = dex::tests::dex041_container(&[2, 1]);
+        let zip = build_zip(&[("classes.dex", &container, true)]);
+        let path = temp_apk("dex041-classes", &zip);
+        let listed = list_classes(&path, 2).unwrap();
+        // Member one defines LFixture0; and LFixture1;, member two repeats LFixture0;,
+        // and the index dedups by descriptor, so the two members' names survive as
+        // the first member's (the prefixed name proves the full path ran).
+        let names: Vec<&str> = listed.iter().map(|entry| entry.dex_name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["classes.dex!classes1.dex", "classes.dex!classes1.dex"],
+            "{listed:?}"
+        );
+        let descriptors: Vec<&str> = listed
+            .iter()
+            .map(|entry| entry.descriptor.as_str())
+            .collect();
+        assert_eq!(descriptors, ["LFixture0;", "LFixture1;"], "{listed:?}");
         std::fs::remove_file(&path).unwrap();
     }
 

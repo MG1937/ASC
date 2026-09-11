@@ -12,6 +12,7 @@ pub(crate) mod container;
 mod filter;
 mod mutf8;
 mod opcodes;
+pub(crate) mod prefix;
 
 use crate::bytes::{read_u16, read_u32};
 use crate::query::{ClassQuery, MemberQuery, Query};
