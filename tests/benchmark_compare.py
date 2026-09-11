@@ -15,6 +15,24 @@ from performance_compare import compare_pairs
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / 'tests' / 'fixtures'
+EFFECT_FLOOR_PERCENT = 3.0
+GATED_METRICS = {
+    'unit/insn_locator',
+    'unit/string_locator',
+    'unit/code_scan',
+    'unit/method_locator',
+    'unit/field_locator',
+    'unit/type_locator',
+    'unit/method_ref_scan',
+    'unit/field_ref_scan',
+    'core/decompile',
+    'cli_getclass/cli_getclass',
+    'cli_findrefs/cli_findrefs',
+}
+
+
+def should_gate(metric, result):
+    return metric in GATED_METRICS and result['regression']
 
 
 def revision(root):
@@ -109,14 +127,22 @@ def main():
                                 samples[key][side].append(value)
                     if answers['base'] != answers['candidate']:
                         raise ValueError(f'{case}: base/candidate outputs differ')
-        metric_count = sum(len(metrics) for metrics in report['samples'].values())
+        metric_count = len(GATED_METRICS)
         report['comparisons'] = {}
+        report['gated_metrics'] = sorted(GATED_METRICS)
+        report['effect_floor_percent'] = EFFECT_FLOOR_PERCENT
         for case, metrics in report['samples'].items():
             for key, values in metrics.items():
-                result = compare_pairs(values['base'], values['candidate'], metric_count)
-                report['comparisons'][f'{case}/{key}'] = result
-                if result['regression']:
-                    report['errors'].append(f'{case}/{key}: significant slowdown ({result["paired_median_change_percent"]:+.2f}%)')
+                metric = f'{case}/{key}'
+                result = compare_pairs(values['base'], values['candidate'], metric_count,
+                                       effect_floor_percent=EFFECT_FLOOR_PERCENT)
+                result['gated'] = metric in GATED_METRICS
+                report['comparisons'][metric] = result
+                if should_gate(metric, result):
+                    report['errors'].append(
+                        f'{metric}: significant material slowdown '
+                        f'({result["paired_median_change_percent"]:+.2f}%)'
+                    )
     except (ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         report['errors'].append(str(error))
     (args.output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

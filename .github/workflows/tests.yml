@@ -37,7 +37,7 @@ jobs:
         run: python tests/run_tests.py --require-decompiler --suite unit
       - name: Integration tests (no skips)
         run: python tests/run_tests.py --require-decompiler --suite integration
-      - name: Reject performance regressions against the target branch
+      - name: Reject material performance regressions against the target branch
         run: python tests/benchmark_compare.py --baseline .performance-base --samples 31
       - name: Check cold-process startup with --debug
         run: python tests/benchmark_startup.py --samples 9 --max-total-ms 100 --max-wall-ms 250

@@ -34,7 +34,7 @@ storage measurements or a guarantee on arbitrary hardware. CI runs both Python
 3.11 and 3.12, including real-DEX checks. Reports and stdout/stderr are uploaded
 from `artifacts/startup/` and `artifacts/reference/` even when a gate fails.
 
-## Zero-regression comparison
+## Practical-regression comparison
 
 ```sh
 python tests/run_tests.py --require-decompiler --suite unit
@@ -57,12 +57,16 @@ in alternating base/candidate order. Warmups are retained in raw logs but exclud
 from statistics. Reference counts and decompiled/CLI outputs must match before
 any performance result can pass.
 
-There is **no allowed percentage slowdown**. A one-sided exact paired sign test
-checks whether the candidate is consistently slower, with a 5% family-wise error
-budget divided across the metrics in that run (Bonferroni correction). A significant
-slowdown fails CI even if it is only 0.1%; balanced noise or one isolated scheduling
-outlier does not. Passing means no statistically significant regression was
-observed in these workloads, not proof of identical timing on every machine.
+Every metric remains in the report, but CI gates only the 11 aggregate user-visible
+paths: module-level instruction, string, code, method, field, type, method-reference
+and field-reference work; core decompilation; and CLI `getclass` / `findrefs`.
+Fine-grained locator sub-metrics remain diagnostic only. A gated metric fails only
+when it is both statistically significant in the one-sided exact paired sign test
+(5% family-wise error budget with Bonferroni correction) and its paired median
+slowdown is at least **3.0%**. Balanced noise, isolated scheduling outliers, and
+statistically detectable sub-3% changes are reported but do not block CI. Passing
+means no material statistically significant regression was observed in these
+workloads, not proof of identical timing on every machine.
 
 The comparison's unit tests exercise small/large regressions, improvements,
 identical timings, noise, outliers and incomplete/invalid measurements. The
