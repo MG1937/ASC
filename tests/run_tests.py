@@ -1,51 +1,33 @@
-import os
-import subprocess
+"""Run self-contained regression tests without an external APK."""
+import argparse
+import importlib.util
+from pathlib import Path
 import sys
-import shutil
+import unittest
 
-WORKSPACE_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-AGENT_SCRIPT = os.path.join(WORKSPACE_ROOT, "agent_operator.py")
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-MEITUAN_APK = os.path.join(WORKSPACE_ROOT, "meituan.apk")
-MEITUAN_CLASS = "Lcom/meituan/android/cashier/activity/MTCashierWrapperActivity;"
-
-def run_test(apk_path, clazz_name):
-    print(f"\n{'='*80}")
-    print(f"Testing APK: {apk_path}")
-    print(f"Class: {clazz_name}")
-    print(f"{'='*80}\n")
-    
-    cmd = [sys.executable, AGENT_SCRIPT, "getclass", "-v", apk_path, clazz_name]
-    
-    print(f"Running command: {' '.join(cmd)}\n")
-    
-    process = subprocess.run(cmd, cwd=WORKSPACE_ROOT, capture_output=True, text=True)
-    
-    print(process.stdout)
-    if process.stderr:
-        print(f"STDERR:\n{process.stderr}")
-    
-    if process.returncode == 0 and "class" in process.stdout.lower():
-        print("\n[SUCCESS] Test passed! Got decompiled code.")
-    else:
-        print(f"\n[FAILED] Test failed with return code {process.returncode}")
-    
-    return process.returncode
-
-def main():
-    temp_dir = os.path.join(WORKSPACE_ROOT, "temp")
-    if os.path.exists(temp_dir):
-        print(f"Cleaning temp directory: {temp_dir}")
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        
-    print("Starting NewTool tests...")
-    
-    if os.path.exists(MEITUAN_APK):
-        rc = run_test(MEITUAN_APK, MEITUAN_CLASS)
-        sys.exit(rc)
-    else:
-        print(f"[SKIP] {MEITUAN_APK} not found")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--require-decompiler', action='store_true')
+    parser.add_argument('--suite', choices=('all', 'unit', 'integration'), default='all')
+    args = parser.parse_args()
+    if args.require_decompiler and importlib.util.find_spec('androguard') is None:
+        parser.error('Androguard is required; install requirements.txt')
+    suite = unittest.defaultTestLoader.discover(str(ROOT / 'tests'), pattern='test_*.py')
+    if args.suite != 'all':
+        def tests(items):
+            for item in items:
+                if isinstance(item, unittest.TestSuite):
+                    yield from tests(item)
+                else:
+                    yield item
+        suite = unittest.TestSuite(test for test in tests(suite)
+                                   if ('test_decompiler.DecompilerTests.' in test.id()
+                                       or test.id().endswith('test_archive_is_reproducible_and_runs_outside_checkout'))
+                                   == (args.suite == 'integration'))
+    if suite.countTestCases() == 0:
+        parser.error('selected suite contains no tests')
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    sys.exit(0 if result.wasSuccessful() and not (args.require_decompiler and result.skipped) else 1)
