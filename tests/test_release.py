@@ -28,6 +28,7 @@ class ReleaseTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as package:
                 names = package.namelist()
                 self.assertTrue(any(name.endswith('/requirements.txt') for name in names))
+                self.assertIn('ASC-v0.1.0-rc.1/LICENSE', names)
                 self.assertFalse(any(name.endswith(('.dex', '.apk', '/test.py', '/test_findrefs.py'))
                                      or '/tests/' in name or '/.git/' in name for name in names))
                 package.extractall(root)

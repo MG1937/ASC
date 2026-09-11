@@ -13,7 +13,7 @@ def build(version, output):
     if not re.fullmatch(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc)\.[1-9]\d*)?', version):
         raise ValueError('expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N (also alpha/beta)')
     paths = subprocess.check_output(
-        ['git', 'ls-files', '-z', '--', 'main.py', 'requirements.txt', 'README.md', 'src', 'docs'],
+        ['git', 'ls-files', '-z', '--', 'main.py', 'requirements.txt', 'README.md', 'LICENSE', 'src', 'docs'],
         cwd=ROOT).decode().split('\0')
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f'ASC-{version}-source.zip'
