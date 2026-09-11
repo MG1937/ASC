@@ -7,7 +7,7 @@
 
 use crate::bytes::{read_u16, read_u32};
 use anyhow::{Context, Result, bail};
-use libdeflater::Decompressor;
+use libdeflater::{DecompressionError, Decompressor};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ZipEntry {
@@ -94,15 +94,32 @@ pub(crate) fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
             Ok(compressed.to_vec())
         }
         8 => {
-            let mut output = vec![0; entry.uncompressed_size];
-            let written = Decompressor::new()
-                .deflate_decompress(compressed, &mut output)
-                .with_context(|| format!("inflate {}", entry.name))?;
-            if written != entry.uncompressed_size {
+            // A declared uncompressed size is attacker-controlled, and a ZIP64
+            // placeholder (0xFFFFFFF0) used to reserve ~4 GiB before any
+            // validation could run. Grow the buffer on demand instead: the first
+            // capacity is four times the compressed size, which covers the ratios
+            // real entries show (the benchmark's is 2.8), and a larger entry pays
+            // one retry per doubling.
+            let declared = entry.uncompressed_size;
+            let initial = declared.min(entry.compressed_size.saturating_mul(4).max(64 * 1024));
+            let mut output = vec![0; initial];
+            let mut decompressor = Decompressor::new();
+            let written = loop {
+                match decompressor.deflate_decompress(compressed, &mut output) {
+                    Ok(written) => break written,
+                    Err(DecompressionError::InsufficientSpace) if output.len() < declared => {
+                        let grown = output.len().saturating_mul(2).max(64 * 1024).min(declared);
+                        output = vec![0; grown];
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("inflate {}", entry.name));
+                    }
+                }
+            };
+            if written != declared {
                 bail!(
-                    "size mismatch for {}: expected {}, got {written}",
-                    entry.name,
-                    entry.uncompressed_size
+                    "size mismatch for {}: expected {declared}, got {written}",
+                    entry.name
                 );
             }
             Ok(output)
@@ -190,6 +207,8 @@ pub(crate) mod tests {
     /// Offsets inside a central-directory entry, as read by the parser.
     const CENTRAL_COMPRESSED_SIZE: usize = 20;
     const CENTRAL_UNCOMPRESSED_SIZE: usize = 24;
+    const CENTRAL_NAME_LENGTH: usize = 28;
+    const CENTRAL_LOCAL_OFFSET: usize = 42;
 
     /// Corrupts `field` of the first central-directory entry.
     fn patch_central_entry(zip: &mut [u8], field: usize, value: u32) {
@@ -248,6 +267,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn deflate_grows_the_buffer_for_a_high_ratio_entry() {
+        // An all-zero payload compresses far below a quarter of its size, so the
+        // first capacity is not enough and the grow path has to run.
+        let payload = vec![0u8; 128 * 1024];
+        let zip = build_zip(&[("classes.dex", &payload, true)]);
+        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
+        let compressed = zip.len();
+        assert!(
+            entry.uncompressed_size > compressed * 4,
+            "fixture is not high-ratio enough"
+        );
+        assert_eq!(inflate_entry(&zip, entry).unwrap(), payload);
+    }
+
+    #[test]
+    fn zip64_placeholder_uncompressed_size_is_rejected() {
+        // 0xFFFFFFF0 is what a ZIP64 archive writes when the real 64-bit size
+        // lives in the extra field. It must fail without reserving the declared
+        // size first.
+        let payload = vec![3u8; 4096];
+        let mut zip = build_zip(&[("classes.dex", &payload, true)]);
+        patch_central_entry(&mut zip, CENTRAL_UNCOMPRESSED_SIZE, 0xFFFFFFF0);
+        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
+        let error = inflate_entry(&zip, entry).unwrap_err().to_string();
+        assert!(error.contains("classes.dex"), "unexpected error: {error}");
+    }
+
+    #[test]
     fn deflate_into_an_undersized_buffer_is_rejected() {
         let payload = vec![2u8; 2048];
         let mut zip = build_zip(&[("classes.dex", &payload, true)]);
@@ -282,5 +329,78 @@ pub(crate) mod tests {
             error.contains("central directory signature"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn zip64_end_of_central_directory_placeholders_are_rejected() {
+        // ZIP64 archives carry 0xFFFF/0xFFFFFFFF placeholders in the plain EOCD
+        // and put the real values in a ZIP64 record. APKs cannot be ZIP64, so
+        // those values must be reported rather than used to scan a 4 GiB range.
+        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
+        let eocd = zip
+            .windows(4)
+            .rposition(|window| window == b"PK\x05\x06")
+            .expect("archive has an EOCD");
+        zip[eocd + 8..eocd + 12].copy_from_slice(&[0xFF; 4]);
+        write_u32(&mut zip, eocd + 12, u32::MAX);
+        write_u32(&mut zip, eocd + 16, u32::MAX);
+        let error = parse_zip_entries(&zip, |_| true).unwrap_err().to_string();
+        assert!(
+            error.contains("bad central directory range"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn concatenated_archives_use_the_last_end_of_central_directory() {
+        // Two archives appended to each other (a common polyglot trick): the EOCD
+        // is found by searching backwards, so the trailing record wins — the same
+        // one the reference implementation's `rfind` picks. Offsets inside a
+        // concatenated archive stay relative to its own start, so this only works
+        // when the prefix has the same layout; that is what the two identical
+        // halves below exercise.
+        let archive = build_zip(&[("classes.dex", b"payload", false)]);
+        let mut both = archive.clone();
+        both.extend_from_slice(&archive);
+        let entries = parse_zip_entries(&both, |_| true).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(inflate_entry(&both, &entries[0]).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn data_descriptor_flag_uses_the_central_directory_sizes() {
+        // Local-header flag bit 3 means sizes and CRC live in a trailing data
+        // descriptor; the central directory still carries them, and that is what
+        // the parser reads.
+        let payload = b"streamed payload".to_vec();
+        let mut zip = build_zip(&[("classes.dex", &payload, false)]);
+        let local = zip
+            .windows(4)
+            .position(|window| window == b"PK\x03\x04")
+            .unwrap();
+        zip[local + 6..local + 8].copy_from_slice(&0x0008u16.to_le_bytes());
+        write_u32(&mut zip, local + 18, 0);
+        write_u32(&mut zip, local + 22, 0);
+        let entries = parse_zip_entries(&zip, |_| true).unwrap();
+        assert_eq!(inflate_entry(&zip, &entries[0]).unwrap(), payload);
+    }
+
+    #[test]
+    fn central_name_length_past_the_directory_is_rejected() {
+        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
+        patch_central_entry(&mut zip, CENTRAL_NAME_LENGTH, 0xFFFF);
+        let error = parse_zip_entries(&zip, |_| true).unwrap_err().to_string();
+        assert!(
+            error.contains("bad ZIP name range"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn central_local_header_offset_past_the_end_is_rejected() {
+        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
+        patch_central_entry(&mut zip, CENTRAL_LOCAL_OFFSET, u32::MAX);
+        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
+        assert!(inflate_entry(&zip, entry).is_err());
     }
 }

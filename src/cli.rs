@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
-#[command(name = "rasc", version, about = "Native Rust the reference implementation")]
+#[command(name = "rasc", version, about = "Native Rust APK and DEX analysis CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

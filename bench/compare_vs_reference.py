@@ -1,4 +1,4 @@
-"""Real-scenario benchmark: rasc (native Rust) vs the original Python ASC.
+"""Real-scenario benchmark: rasc (native Rust) vs the reference implementation.
 
 Correctness is checked before any timing is reported: every scenario is validated
 for exit status, output size, and (where comparable) the result set itself, so a
@@ -46,7 +46,7 @@ def rasc(*args):
     return [RASC, args[0], "--threads", THREADS, APK, *args[1:]]
 
 
-def asc(*args):
+def reference(*args):
     """python main.py <subcommand> --threads N <apk> ..."""
     return [PY, "main.py", args[0], "--threads", THREADS, APK, *args[1:]]
 
@@ -77,34 +77,50 @@ if late is None:
     raise SystemExit("could not find a late-DEX class for the getclass scenario")
 _, late_dex, late_class = late
 
+
+def first_class():
+    """The first class of the archive, for the early-class scenario.
+
+    Both probe classes are derived from the APK: the script never hardcodes an
+    application-specific class name.
+    """
+    for line in run([RASC, "classes", "--threads", THREADS, APK]).splitlines():
+        parts = line.split(" | ")
+        if len(parts) >= 2 and parts[1].startswith("L"):
+            return parts[1]
+    raise SystemExit("could not find a class for the getclass scenario")
+
+
+EARLY_CLASS = first_class()
+
 SCENARIOS = [
     ("findrefs string Authorization",
      rasc("findrefs", "string", "Authorization"),
-     asc("findrefs", "string", "Authorization"), 5, "rows"),
-    ("findrefs string com.example.sdk",
-     rasc("findrefs", "string", "com.example.sdk"),
-     asc("findrefs", "string", "com.example.sdk"), 3, "rows"),
+     reference("findrefs", "string", "Authorization"), 5, "rows"),
+    ("findrefs string androidx.annotation",
+     rasc("findrefs", "string", "androidx.annotation"),
+     reference("findrefs", "string", "androidx.annotation"), 3, "rows"),
     ("findrefs type Gson",
      rasc("findrefs", "type", "Gson"),
-     asc("findrefs", "type", "Gson"), 3, "rows"),
+     reference("findrefs", "type", "Gson"), 3, "rows"),
     ("findrefs method onCreate",
      rasc("findrefs", "method", "onCreate"),
-     asc("findrefs", "method", "onCreate"), 3, "rows"),
-    ("findrefs method onCreate --class com.example --fuzzy-class",
-     rasc("findrefs", "method", "onCreate", "--class", "com.example", "--fuzzy-class"),
-     asc("findrefs", "method", "onCreate", "--class", "com.example", "--fuzzy-class"),
+     reference("findrefs", "method", "onCreate"), 3, "rows"),
+    ("findrefs method onCreate --class androidx --fuzzy-class",
+     rasc("findrefs", "method", "onCreate", "--class", "androidx", "--fuzzy-class"),
+     reference("findrefs", "method", "onCreate", "--class", "androidx", "--fuzzy-class"),
      3, "rows"),
     ("findrefs field INSTANCE",
      rasc("findrefs", "field", "INSTANCE"),
-     asc("findrefs", "field", "INSTANCE"), 3, "rows"),
+     reference("findrefs", "field", "INSTANCE"), 3, "rows"),
     ("getclass early (classes.dex)",
-     rasc("getclass", "Lcom/example/Probe;"),
-     asc("getclass", "Lcom/example/Probe;"), 5, "nonempty"),
+     rasc("getclass", EARLY_CLASS),
+     reference("getclass", EARLY_CLASS), 5, "nonempty"),
     (f"getclass late ({late_dex})",
-     rasc("getclass", late_class), asc("getclass", late_class), 3, "nonempty"),
+     rasc("getclass", late_class), reference("getclass", late_class), 3, "nonempty"),
     ("getclass missing class (error path)",
      rasc("getclass", "Lcom/example/DefinitelyNotThere;"),
-     asc("getclass", "Lcom/example/DefinitelyNotThere;"), 3, "empty"),
+     reference("getclass", "Lcom/example/DefinitelyNotThere;"), 3, "empty"),
     ("manifest (binary AXML -> XML)",
      [RASC, "manifest", APK], [PY, DRIVER, "manifest", APK], 3, "nonempty"),
     ("classes (full class index)",

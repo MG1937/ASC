@@ -18,6 +18,7 @@ new corpus APKs. Needs the reference checkout and its Python environment.
 """
 
 import os
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -54,6 +55,68 @@ def rasc_classes(binary: str, apk: str) -> set[str]:
 def asc_classes(apk: str) -> set[str]:
     out = run([os.environ["REF_PY"], DRIVER, "classes", apk, "8"], cwd=os.environ["REF_ROOT"], env=asc_environment())
     return {to_java_name(line) for line in out.splitlines() if line.strip()}
+
+
+ROW_PREFIX = " | matched=("
+
+
+def split_rows(lines: set[str]) -> tuple[dict[str, str], int]:
+    """Map each row's identity to its matched text.
+
+    A row reads `<dex> | <class>-><method> | matched=(<text>)`. The reference
+    implementation prints the matched text verbatim, so a string constant that
+    spans lines arrives as extra fragment lines and the text itself is cut short
+    (both documented in PERFORMANCE.md); those lines have no identity and are
+    counted separately.
+    """
+    identities: dict[str, str] = {}
+    fragments = 0
+    for line in lines:
+        head, marker, text = line.partition(ROW_PREFIX)
+        if not marker or " | " not in head or "->" not in head:
+            fragments += 1
+            continue
+        identities[head] = text[:-1] if text.endswith(")") else text
+    return identities, fragments
+
+
+def reference_truncation(theirs: str, ours: str) -> bool:
+    """True when `theirs` looks like the reference's cut-short copy of `ours`."""
+    if not theirs or len(theirs) >= len(ours):
+        return False
+    for length in range(1, len(theirs) + 1):
+        if theirs[:length] not in ours:
+            return False
+    return True
+
+
+# Broad sweep across all four modes. The reference locator is a byte regex with no
+# instruction-boundary check, so it reports *extra* rows here (documented in
+# PERFORMANCE.md). The sweep check is therefore one-directional: rasc must never
+# report a row the reference misses, and the extras are only counted.
+SWEEP_QUERIES = [
+    "string http",
+    "string android.permission",
+    "string Lcom",
+    "string key",
+    "string value",
+    "string UTF-8",
+    "string config",
+    "type Ljava/lang/String;",
+    "type Activity",
+    "type android",
+    "method <init>",
+    "method on",
+    "method get",
+    "field m",
+    "field INSTANCE",
+]
+
+
+# A pattern the reference treats literally: it matches class names with `re`, so
+# `.` is a wildcard and `$` an anchor there. Letters, digits, slashes and dots in a
+# package prefix are safe.
+SAFE_PATTERN = re.compile(r"^[A-Za-z0-9_./]+$")
 
 
 def rasc_rows(binary: str, apk: str, query: str) -> set[str]:
@@ -134,13 +197,93 @@ def main() -> int:
 
         for query in QUERIES:
             a, b = rasc_rows(binary, apk, query), asc_rows(apk, query)
-            if a == b:
-                print(f"  findrefs {query}: {len(a)} identical")
-            else:
+            ours, _ = split_rows(a)
+            theirs, fragments = split_rows(b)
+            if ours.keys() != theirs.keys():
                 failures += 1
-                print(f"  findrefs {query}: DIFFER rasc={len(a)} asc={len(b)}")
-                print(f"    only rasc: {sorted(a - b)[:2]}")
-                print(f"    only asc : {sorted(b - a)[:2]}")
+                print(f"  findrefs {query}: DIFFER rasc={len(ours)} asc={len(theirs)}")
+                print(f"    only rasc: {sorted(set(ours) - set(theirs))[:2]}")
+                print(f"    only asc : {sorted(set(theirs) - set(ours))[:2]}")
+                continue
+            # Same references; the reference's matched text may still be cut short.
+            cut = [key for key in ours if ours[key] != theirs[key]]
+            unexpected = [key for key in cut if not reference_truncation(theirs[key], ours[key])]
+            if unexpected:
+                failures += 1
+                print(f"  findrefs {query}: matched text differs in {len(unexpected)} row(s), not a truncation")
+                for key in unexpected[:2]:
+                    print(f"    rasc: {ours[key]!r}")
+                    print(f"    asc : {theirs[key]!r}")
+                continue
+            note = ""
+            if cut:
+                note = f", matched text cut short in {len(cut)} (reference truncation)"
+            if fragments:
+                note += f", {fragments} reference fragment line(s)"
+            print(f"  findrefs {query}: {len(ours)} row identities identical{note}")
+
+        swept = 0
+        for query in SWEEP_QUERIES:
+            a, b = rasc_rows(binary, apk, query), asc_rows(apk, query)
+            ours, _ = split_rows(a)
+            theirs, fragments = split_rows(b)
+            missing = sorted(set(ours) - set(theirs))
+            extra = len(set(theirs) - set(ours))
+            swept += 1
+            if missing:
+                failures += 1
+                print(f"  sweep {query}: rasc reports {len(missing)} row(s) the reference misses")
+                for row in missing[:3]:
+                    print(f"    {row}")
+            else:
+                print(
+                    f"  sweep {query}: {len(ours)} rows, {extra} reference-only, "
+                    f"{fragments} fragment(s)"
+                )
+
+        # Filter sweep: the class filters are their own code path (exact, fuzzy and
+        # the dotted-name normalization), and the reference matches them with `re`,
+        # so only literal-safe package prefixes are compared. One-directional like
+        # the query sweep: a row rasc reports and the reference does not is a bug.
+        # The class pattern constrains the class the reference points at, so the
+        # patterns are derived from the unfiltered rows themselves - a package that
+        # really does define the queried member. Otherwise every combination would
+        # trivially return nothing on both sides and check no rows at all.
+        checked_rows = 0
+        filtered = 0
+        for member in ("onCreate", "on"):
+            base_rows, _ = split_rows(rasc_rows(binary, apk, f"method {member}"))
+            counts: dict[str, int] = {}
+            for row in base_rows:
+                parts = row.split(" | ")
+                if len(parts) != 2 or "->" not in parts[1]:
+                    continue
+                name = to_java_name(parts[1].split("->", 1)[0])
+                if "$" in name or "." not in name:
+                    continue
+                prefix = name.rsplit(".", 1)[0]
+                if SAFE_PATTERN.match(prefix):
+                    counts[prefix] = counts.get(prefix, 0) + 1
+            for pattern in [p for p, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:4]]:
+                for extra in ([], ["--fuzzy-class"]):
+                    args = f"method {member} --class {pattern}"
+                    if extra:
+                        args += " --fuzzy-class"
+                    ours_rows, _ = split_rows(rasc_rows(binary, apk, args))
+                    theirs_rows, _ = split_rows(asc_rows(apk, args))
+                    missing = sorted(set(ours_rows) - set(theirs_rows))
+                    filtered += 1
+                    checked_rows += len(ours_rows)
+                    if missing:
+                        failures += 1
+                        flag = " --fuzzy-class" if extra else ""
+                        print(
+                            f"  filter {member} --class {pattern}{flag}: rasc reports "
+                            f"{len(missing)} of {len(ours_rows)} row(s) the reference misses"
+                        )
+                        for row in missing[:3]:
+                            print(f"    {row}")
+        print(f"  filters: {filtered} combination(s), {checked_rows} rows checked")
 
         ours_manifest = run([binary, "manifest", apk])
         theirs_manifest = run(

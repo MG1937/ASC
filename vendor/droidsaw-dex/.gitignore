@@ -1,0 +1,13 @@
+/target
+.claude/
+tests/fixtures/*.dex
+tests/snapshots/
+droidsaw-semgrep-*/
+
+# Secrets / local environment overrides — never commit.
+.env
+.env.*
+/Cargo.lock
+/fuzz/target
+/fuzz/Cargo.lock
+/orchestration

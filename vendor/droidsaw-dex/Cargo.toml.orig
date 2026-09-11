@@ -1,0 +1,42 @@
+[package]
+name = "droidsaw-dex"
+version = "2.0.0"
+exclude = ["/tests", "/orchestration", "/fuzz"]
+edition = "2024"
+rust-version.workspace = true
+license = "BSD-3-Clause"
+description = "DROIDSAW Dalvik bytecode (DEX) decompiler. Builds CFG, SSA form, infers types, emits Java source."
+repository = "https://github.com/droidsaw/droidsaw-dex"
+homepage = "https://droidsaw.com"
+keywords = ["android", "dalvik", "dex", "decompiler", "bytecode"]
+categories = ["development-tools", "parser-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+scroll = "0.13.0"
+thiserror = "2.0.18"
+adler2 = "2.0.1"
+sha1 = "0.11.0"
+droidsaw-common = { version = "2", path = "../droidsaw-common" }
+serde = { version = "1.0.228", features = ["derive"] }
+rustc-hash = "2.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+droidsaw-fixture-harness = { path = "../droidsaw-fixture-harness" }
+proptest = "1"
+toml = "1.1.2"
+sha2 = "0.11.0"
+zip = "2"
+# Test-only: R8/Proguard mapping parser. Used as the independent
+# oracle in `tests/r8_oracle_ratchet.rs`. NEVER consumed from
+# production code — mapping is unavailable on real APKs by design,
+# so droidsaw's runtime never reads it. The ratchet uses mapping
+# only to catch FPs/FNs in the structural recognisers during
+# development. Discipline gauge: `scripts/check-proguard-test-only.sh`
+# greps `src/` and `fuzz/` for any `use proguard` / `proguard::` and
+# fails if found. The test-only label cannot decay silently.
+# Pinned exact to prevent silent uptake of a takeover release.
+proguard = "=5.10.3"

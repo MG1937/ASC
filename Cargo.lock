@@ -328,8 +328,6 @@ dependencies = [
 [[package]]
 name = "droidsaw-dex"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19ebb88232385e3109ca6e0b4d7abb8f98326f5ae6c6a5c887b2c55d53bdca9b"
 dependencies = [
  "adler2",
  "droidsaw-common",

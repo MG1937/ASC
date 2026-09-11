@@ -48,12 +48,18 @@ struct MemberId {
 
 pub fn defines_class(data: &[u8], descriptor: &[u8]) -> Result<bool> {
     let dex = Dex::parse(data)?;
-    let Some(type_idx) = dex.find_exact_type(descriptor) else {
-        return Ok(false);
-    };
+    // Resolve each class_def's own type id rather than looking up "the" type id
+    // for the descriptor: a DEX may repeat a descriptor across several type ids
+    // (the spec only requires them to be sorted, and crafted or merged files do
+    // repeat one), and `class_names` reads each class_def's own id. A
+    // first-match-only lookup would make `classes` list a class that `getclass`
+    // then cannot find.
     for index in 0..dex.header.classes_size {
         let offset = dex.header.classes_off + index * 32;
-        if dex.u32(offset)? == type_idx as u32 {
+        let type_idx = dex.u32(offset)? as usize;
+        if let Ok(string_idx) = dex.type_string_idx(type_idx)
+            && dex.string_bytes(string_idx)? == descriptor
+        {
             return Ok(true);
         }
     }
@@ -214,15 +220,6 @@ impl<'a> Dex<'a> {
         Ok(MemberId {
             class_idx: read_u16(self.data, offset)?,
             name_idx: self.u32(offset + 4)?,
-        })
-    }
-
-    fn find_exact_type(&self, descriptor: &[u8]) -> Option<usize> {
-        (0..self.header.types_size).find(|&index| {
-            self.type_string_idx(index)
-                .ok()
-                .and_then(|string_idx| self.string_bytes(string_idx).ok())
-                == Some(descriptor)
         })
     }
 
@@ -534,6 +531,9 @@ pub(crate) mod tests {
         }
         let total = out.len() as u32;
         for header in headers {
+            // `container_size` is the whole container; each member keeps its own
+            // `file_size`, which is what enumerates the members (the reference
+            // implementation advances the same way).
             write_u32(&mut out, header + 0x70, total);
         }
         out
@@ -544,6 +544,16 @@ pub(crate) mod tests {
     ///
     /// The class count is the knob that selects the sequential or the parallel
     /// scan path, so the same fixture can be used to compare the two directly.
+    /// DEX header checksum, as droidsaw-dex validates it before parsing.
+    fn adler32(bytes: &[u8]) -> u32 {
+        let (mut a, mut b) = (1u32, 0u32);
+        for byte in bytes {
+            a = (a + u32::from(*byte)) % 65521;
+            b = (b + a) % 65521;
+        }
+        (b << 16) | a
+    }
+
     pub(crate) fn const_string_fixture(class_count: usize) -> Vec<u8> {
         const_string_fixture_with(class_count, 0, 0x70)
     }
@@ -563,12 +573,16 @@ pub(crate) mod tests {
         for index in 0..class_count {
             strings.push(format!("m{index}"));
         }
+        // "V" (void) backs the single method prototype; without a proto_ids
+        // section droidsaw rejects the fixture before decompiling.
+        strings.insert(class_count + 1, "V".to_owned());
         let n_strings = strings.len();
-        let n_types = class_count + 1;
+        let n_types = class_count + 2;
 
         let string_ids_off = header_size;
         let type_ids_off = string_ids_off + n_strings * 4;
-        let method_ids_off = type_ids_off + n_types * 4;
+        let proto_ids_off = type_ids_off + n_types * 4;
+        let method_ids_off = proto_ids_off + 12;
         let class_defs_off = method_ids_off + class_count * 8;
         let data_off = class_defs_off + class_count * 32;
 
@@ -617,6 +631,8 @@ pub(crate) mod tests {
         write_u32(&mut out, 0x3c, (string_ids_off as u32) + base);
         write_u32(&mut out, 0x40, n_types as u32);
         write_u32(&mut out, 0x44, (type_ids_off as u32) + base);
+        write_u32(&mut out, 0x48, 1); // proto_ids_size
+        write_u32(&mut out, 0x4c, (proto_ids_off as u32) + base);
         write_u32(&mut out, 0x58, class_count as u32);
         write_u32(&mut out, 0x5c, (method_ids_off as u32) + base);
         write_u32(&mut out, 0x60, class_count as u32);
@@ -630,13 +646,23 @@ pub(crate) mod tests {
             );
         }
         write_u32(&mut out, type_ids_off, 0);
+        // type_ids[class_count + 1] -> "V", the prototype's return type.
+        write_u32(
+            &mut out,
+            type_ids_off + (class_count + 1) * 4,
+            (1 + class_count) as u32,
+        );
+        // One prototype: shorty "V", returns void, takes no parameters.
+        write_u32(&mut out, proto_ids_off, (1 + class_count) as u32);
+        write_u32(&mut out, proto_ids_off + 4, (class_count + 1) as u32);
+        write_u32(&mut out, proto_ids_off + 8, 0);
         for (index, class_data_off) in class_data_offsets.iter().enumerate() {
             write_u32(&mut out, type_ids_off + (index + 1) * 4, (index + 1) as u32);
 
             let method = method_ids_off + index * 8;
             write_u16(&mut out, method, (index + 1) as u16);
             write_u16(&mut out, method + 2, 0);
-            write_u32(&mut out, method + 4, (1 + class_count + index) as u32);
+            write_u32(&mut out, method + 4, (2 + class_count + index) as u32);
 
             let class_def = class_defs_off + index * 32;
             write_u32(&mut out, class_def, (index + 1) as u32);
@@ -645,6 +671,11 @@ pub(crate) mod tests {
             write_u32(&mut out, class_def + 24, (*class_data_off as u32) + base);
         }
         out[data_off..].copy_from_slice(&data);
+        // The scanner ignores the checksum, but droidsaw validates it before
+        // parsing, so the fixture carries a correct Adler-32 over the payload
+        // (everything after the 12-byte checksum/signature prefix).
+        let checksum = adler32(&out[12..]);
+        write_u32(&mut out, 0x08, checksum);
         out
     }
 

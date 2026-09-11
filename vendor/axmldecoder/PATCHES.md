@@ -1,6 +1,6 @@
 # rasc patches to axmldecoder 0.5.0
 
-This is a vendored copy of `axmldecoder 0.5.0` (MIT OR Apache-2.0) with three changes,
+This is a vendored copy of `axmldecoder 0.5.0` (MIT OR Apache-2.0) with the changes below,
 all marked `PATCHED (rasc)` in the source:
 
 1. `src/stringpool.rs` - `parse_utf16_string` implemented the extended two-byte length
@@ -26,3 +26,16 @@ all marked `PATCHED (rasc)` in the source:
 Everything else is upstream. `rasc` still validates the chunk skeleton before calling
 the decoder (see `src/manifest.rs`), so the remaining `unwrap`s are unreachable for
 input rasc accepts.
+
+6. `src/binaryxml.rs` - `ResourceValue` keeps the raw type byte and `format_value` dispatches
+   through `ResourceValueType::from_raw`, so typed values whose type is not one of the named
+   ones (0x07/0x08 dynamic references and attributes, anything >= 0x20) render with the
+   `<0x.., type 0x..>` fallback instead of failing the whole document. Before this, a single
+   unlisted type byte made `rasc manifest` fail on that APK.
+7. `src/binaryxml.rs` - `RADIX_MULTS` keeps the exact powers of two (2^-8, 2^-15, 2^-23,
+   2^-31). Androguard rounds them to seven digits, which shifts a large mantissa in the
+   sixth decimal (fraction mantissa 16384, radix 1: `50.000003%` there, `50.000000%` here).
+   The exact value is the correct one, so the divergence is deliberate.
+8. `src/binaryxml.rs` - the four AOSP colour types 0x1C-0x1F share one `Color` variant, while
+   the reserved types 0x13-0x1B deliberately stay on the fallback (Androguard prints them as
+   decimals because its integer branch spans 0x10-0x1F, but AOSP reserves them).

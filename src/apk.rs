@@ -240,21 +240,34 @@ pub fn decompile_class(
     let Some(hit) = find_class(path, descriptor, threads, debug)? else {
         return Ok(None);
     };
-    let dex = droidsaw_dex::DexFile::parse(&hit.data, None)
+    // DEX 041 containers carry an extra-long header and a container-wide
+    // checksum, which the decompiler rejects; hand it a normalized view.
+    let normalized = dex::container::standard_header_view(&hit.data);
+    let data = normalized.as_deref().unwrap_or(&hit.data);
+    // Scoped parse (vendored patch, see vendor/droidsaw-dex/PATCHES.md): the full
+    // parse spends most of its time on emit-supporting tables and on class bodies
+    // other than this one, none of which decompilation reads. The scoped parse
+    // returns the same source for the requested class, verified byte-for-byte
+    // against an unpatched binary over a stratified class sample.
+    let dex = droidsaw_dex::DexFile::parse_for_class(data, descriptor)
         .context("parse target DEX for decompilation")?;
     let Some((_index, class_def)) = dex.find_class(descriptor) else {
         bail!("{descriptor} is missing from the DEX that reported defining it");
     };
-    let source = droidsaw_dex::classes::decompile_class(&dex, &hit.data, class_def);
+    let source = droidsaw_dex::classes::decompile_class(&dex, data, class_def);
     Ok(Some((hit.dex_name, source)))
 }
 
 pub fn read_entry(path: &Path, wanted: &str) -> Result<Vec<u8>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mmap = unsafe { Mmap::map(&file) }.context("map APK")?;
+    // CPython's `zipfile` resolves a name to the *last* central-directory record
+    // carrying it, and the reference implementation reads the manifest through
+    // it; matching that keeps a crafted archive with two AndroidManifest.xml
+    // entries resolving the same way in both tools.
     let entry = crate::zip::parse_zip_entries(&mmap, |name| name == wanted.as_bytes())?
         .into_iter()
-        .next()
+        .last()
         .with_context(|| format!("{wanted} not found in APK"))?;
     inflate_entry(&mmap, &entry)
 }
@@ -269,11 +282,26 @@ fn parse_dex_entries(data: &[u8]) -> Result<Vec<ZipEntry>> {
         name.starts_with(b"classes") && name.ends_with(b".dex") && !name.contains(&b'/')
     })?;
     if !named.is_empty() {
-        return Ok(named);
+        return Ok(dedup_names(named));
     }
-    crate::zip::parse_zip_entries(data, |name| {
+    Ok(dedup_names(crate::zip::parse_zip_entries(data, |name| {
         name.ends_with(b".dex") && !name.contains(&b'/')
-    })
+    })?))
+}
+
+/// Keeps the first entry for each name.
+///
+/// A ZIP may hold two entries with the same name (crafted or repacked archives
+/// do). The reference implementation keeps the first `classes*.dex` it meets
+/// while scanning the central directory, so a class defined only in a duplicate
+/// entry stays invisible there; scanning both copies would instead report every
+/// row twice and pick up classes the reference never sees.
+fn dedup_names(entries: Vec<crate::zip::ZipEntry>) -> Vec<crate::zip::ZipEntry> {
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .filter(|entry| seen.insert(entry.name.clone()))
+        .collect()
 }
 #[cfg(test)]
 mod tests {
@@ -288,6 +316,92 @@ mod tests {
         let rows =
             find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
         assert_eq!(rows, ["app.dex | LFixture0;->m0 | matched=(Authorization)"]);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn duplicate_classes_dex_entries_use_the_first_copy() {
+        let first = dex::tests::const_string_fixture(1);
+        let second = dex::tests::const_string_fixture(2);
+        let zip = build_zip(&[
+            ("classes.dex", &first, true),
+            ("classes.dex", &second, true),
+        ]);
+        let path = temp_apk("duplicate-classes", &zip);
+        let rows =
+            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
+        assert_eq!(
+            rows,
+            ["classes.dex | LFixture0;->m0 | matched=(Authorization)"]
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn duplicate_fallback_dex_entries_use_the_first_copy() {
+        let first = dex::tests::const_string_fixture(1);
+        let second = dex::tests::const_string_fixture(2);
+        let zip = build_zip(&[("app.dex", &first, true), ("app.dex", &second, true)]);
+        let path = temp_apk("duplicate-fallback", &zip);
+        let rows =
+            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
+        assert_eq!(rows, ["app.dex | LFixture0;->m0 | matched=(Authorization)"]);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn duplicate_manifest_entries_use_the_last_copy() {
+        let zip = build_zip(&[
+            ("AndroidManifest.xml", b"first".as_slice(), false),
+            ("AndroidManifest.xml", b"second".as_slice(), false),
+        ]);
+        let path = temp_apk("duplicate-manifest", &zip);
+        assert_eq!(read_entry(&path, "AndroidManifest.xml").unwrap(), b"second");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn scoped_parse_keeps_only_the_requested_class_bodies() {
+        let dex = dex::tests::const_string_fixture(2);
+        let full = droidsaw_dex::DexFile::parse(&dex, None).unwrap();
+        let scoped = droidsaw_dex::DexFile::parse_for_class(&dex, "LFixture1;").unwrap();
+        assert!(
+            full.class_datas.len() > scoped.class_datas.len(),
+            "scoped parse kept every class body ({} vs {})",
+            full.class_datas.len(),
+            scoped.class_datas.len()
+        );
+        assert!(scoped.find_class("LFixture1;").is_some());
+        let (_, full_def) = full.find_class("LFixture1;").unwrap();
+        let (_, scoped_def) = scoped.find_class("LFixture1;").unwrap();
+        assert_eq!(
+            droidsaw_dex::classes::decompile_class(&full, &dex, full_def),
+            droidsaw_dex::classes::decompile_class(&scoped, &dex, scoped_def),
+            "scoped parse changed the decompiled source"
+        );
+    }
+
+    #[test]
+    fn scoped_parse_falls_back_to_the_full_parse_for_an_unknown_descriptor() {
+        // The vendor patch's guard compares against canonical descriptors; a
+        // spelling that matches no class must not hand back a body-less DEX.
+        let dex = dex::tests::const_string_fixture(2);
+        let full = droidsaw_dex::DexFile::parse(&dex, None).unwrap();
+        let fallback = droidsaw_dex::DexFile::parse_for_class(&dex, "LNo/Such;").unwrap();
+        assert_eq!(fallback.code_items.len(), full.code_items.len());
+        assert_eq!(fallback.class_datas.len(), full.class_datas.len());
+    }
+
+    #[test]
+    fn decompiles_a_class_from_a_synthetic_apk() {
+        let dex = dex::tests::const_string_fixture(1);
+        let zip = build_zip(&[("classes.dex", &dex, true)]);
+        let path = temp_apk("decompile", &zip);
+        let (entry, source) = decompile_class(&path, "LFixture0;", 2, false)
+            .unwrap()
+            .expect("fixture class is found");
+        assert_eq!(entry, "classes.dex");
+        assert!(source.contains("Fixture0"), "unexpected source: {source}");
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -340,6 +454,98 @@ mod tests {
                 "classes.dex!classes1.dex | LFixture1;->m1 | matched=(Authorization)",
                 "classes.dex!classes2.dex | LFixture0;->m0 | matched=(Authorization)",
             ]
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn decompiles_a_class_from_every_logical_dex_of_a_041_container() {
+        // A DEX 041 container overlays each member's header at offset 0, so the
+        // Adler-32 a member stores no longer covers the bytes the decompiler
+        // sees. findrefs never validates it (our scanner does not); the
+        // decompiler does, so this test guards the second member too.
+        // Member one defines LFixture0;, member two LFixture0; and LFixture1;.
+        let container = dex::tests::dex041_container(&[1, 2]);
+        let zip = build_zip(&[("classes.dex", &container, true)]);
+        let path = temp_apk("dex041-getclass", &zip);
+        for (descriptor, expected_entry) in [
+            ("LFixture0;", "classes.dex!classes1.dex"),
+            ("LFixture1;", "classes.dex!classes2.dex"),
+        ] {
+            let hit = decompile_class(&path, descriptor, 2, false).unwrap();
+            let (entry, source) = hit.unwrap_or_else(|| panic!("{descriptor} did not decompile"));
+            assert!(entry.starts_with(expected_entry), "found in {entry}");
+            assert!(source.contains("Fixture"), "unexpected source: {source}");
+        }
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn an_entry_that_is_not_a_dex_is_a_clean_error() {
+        // A packer can leave junk in a classes*.dex entry, and a corrupted magic
+        // looks the same. rasc reports that loudly instead of guessing: the
+        // reference's findrefs errors on such archives too (its class lookup
+        // skips them silently), and silently analysing "the rest" would hide the
+        // fact that part of the archive was not analysed at all. What this test
+        // pins is that the failure is a message with an exit code, not a panic and
+        // not an empty result.
+        let good = dex::tests::const_string_fixture(1);
+        let zip = build_zip(&[
+            ("classes.dex", b"JUNKJUNKJUNK".as_slice(), false),
+            ("classes2.dex", &good, true),
+        ]);
+        let path = temp_apk("junk-dex", &zip);
+        let error = find_references(&path, &Query::String("Authorization".to_owned()), 2, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("invalid DEX header"),
+            "unexpected error: {error}"
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn find_class_finds_a_class_whose_type_id_is_a_later_duplicate() {
+        // A DEX may repeat a descriptor across several type ids. `list_classes`
+        // resolves each class_def's own type id, so `find_class` has to do the
+        // same: looking up "the" type id for the descriptor makes the two
+        // commands contradict each other on such a file.
+        let mut dex = dex::tests::const_string_fixture(2);
+        let header_size = crate::bytes::read_u32(&dex, 0x24).unwrap() as usize;
+        let strings = crate::bytes::read_u32(&dex, 0x38).unwrap() as usize;
+        // type_ids[0] belongs to no class_def; pointing it at "LFixture0;"
+        // (string index 1) makes the descriptor's first match a different id than
+        // the one the class's class_def carries.
+        crate::zip::tests::write_u32(&mut dex, header_size + strings * 4, 1);
+        let zip = build_zip(&[("classes.dex", &dex, true)]);
+        let path = temp_apk("duplicate-type-id", &zip);
+        let listed = list_classes(&path, 2).unwrap();
+        assert!(
+            listed.iter().any(|entry| entry.descriptor == "LFixture0;"),
+            "fixture stopped listing the class: {listed:?}"
+        );
+        let hit = find_class(&path, "LFixture0;", 2, false).unwrap();
+        assert!(
+            hit.is_some(),
+            "listed by classes but missing from find_class"
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn single_member_041_container_reports_the_plain_dex_name() {
+        // The reference implementation only renames container members when there
+        // is more than one, so a single-member container keeps the entry name in
+        // every row (the dex column is part of a row's identity).
+        let container = dex::tests::dex041_container(&[1]);
+        let zip = build_zip(&[("classes.dex", &container, true)]);
+        let path = temp_apk("dex041-single", &zip);
+        let rows =
+            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
+        assert_eq!(
+            rows,
+            ["classes.dex | LFixture0;->m0 | matched=(Authorization)"]
         );
         std::fs::remove_file(&path).unwrap();
     }

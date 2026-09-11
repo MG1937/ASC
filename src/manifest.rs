@@ -105,6 +105,16 @@ fn validate_chunks(data: &[u8]) -> Result<()> {
     if map.typ != RESOURCE_MAP {
         bail!("binary XML has no resource map after its string pool");
     }
+    // The decoder derives its entry count as `(size - header_size) / 4` in u32,
+    // so a chunk declaring a size below its header size wraps to ~1e9 entries.
+    // Nothing else validates this chunk.
+    if map.header_size != 8 || map.size < 8 || (map.size - 8) % 4 != 0 {
+        bail!(
+            "binary XML resource map chunk is malformed: header_size={}, size={}",
+            map.header_size,
+            map.size
+        );
+    }
     let nodes = map_offset + map.size;
     if nodes >= end {
         bail!("binary XML has no node chunks");
@@ -540,6 +550,115 @@ mod tests {
             error.contains("styles is not supported"),
             "unexpected error: {error}"
         );
+    }
+
+    /// First offset of `needle` in `haystack`.
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    #[test]
+    fn renders_unknown_typed_values_like_the_reference() {
+        // AXML defines types beyond the ones Androguard names (0x07 dynamic
+        // reference, 0x08 dynamic attribute, 0x13-0x1b, >= 0x20). The reference
+        // prints its `<0x.., type 0x..>` fallback rather than refusing the whole
+        // document, so an unknown type byte must decode.
+        let mut data = binary_manifest();
+        // `android:icon` is a reference value: size 8, res0 0, type 0x01, data 0x7F0D0001.
+        let icon = [0x08, 0x00, 0x00, 0x01, 0x01, 0x00, 0x0D, 0x7F];
+        let at = find_bytes(&data, &icon).expect("icon attribute value");
+        assert_eq!(
+            find_bytes(&data[at + 1..], &icon),
+            None,
+            "value pattern is not unique"
+        );
+        data[at + 3] = 0x07;
+        let rendered = decode(&data).unwrap();
+        assert!(
+            rendered.contains("android:icon=\"&lt;0x7F0D0001, type 0x07&gt;\""),
+            "unexpected rendering: {rendered}"
+        );
+    }
+
+    #[test]
+    fn reserved_types_keep_the_unknown_value_fallback() {
+        // 0x13-0x1B are reserved in AOSP. Androguard's integer branch spans
+        // 0x10-0x1F, so it prints them as decimals; claiming to know a reserved
+        // type is worse than showing the raw value, so they stay on the fallback.
+        let mut data = binary_manifest();
+        // `android:debuggable` is a boolean value: size 8, res0 0, type 0x12, data 1.
+        let debuggable = [0x08, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00];
+        let at = find_bytes(&data, &debuggable).expect("debuggable attribute value");
+        assert_eq!(
+            find_bytes(&data[at + 1..], &debuggable),
+            None,
+            "value pattern is not unique"
+        );
+        data[at + 3] = 0x13;
+        let rendered = decode(&data).unwrap();
+        assert!(
+            rendered.contains("android:debuggable=\"&lt;0x1, type 0x13&gt;\""),
+            "unexpected rendering: {rendered}"
+        );
+    }
+
+    #[test]
+    fn complex_values_use_exact_powers_of_two() {
+        // Fraction with mantissa 16384 and radix 1 is exactly 0.5, so 50.000000%.
+        // Androguard rounds its radix multiples to seven digits and prints
+        // 50.000003%; the exact value is kept deliberately.
+        let mut data = binary_manifest();
+        // `android:textSize` is a dimension: size 8, res0 0, type 0x05, data 0x1001.
+        let text_size = [0x08, 0x00, 0x00, 0x05, 0x01, 0x10, 0x00, 0x00];
+        let at = find_bytes(&data, &text_size).expect("textSize attribute value");
+        assert_eq!(
+            find_bytes(&data[at + 1..], &text_size),
+            None,
+            "value pattern is not unique"
+        );
+        data[at + 3] = 0x06; // dimension -> fraction
+        data[at + 4..at + 8].copy_from_slice(&0x0000_4010u32.to_le_bytes()); // mantissa 16384, radix 1, unit '%'
+        let rendered = decode(&data).unwrap();
+        assert!(
+            rendered.contains("android:textSize=\"50.000000%\""),
+            "unexpected rendering: {rendered}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_resource_map_chunk_smaller_than_its_header() {
+        // The decoder computes its entry count as `(size - header_size) / 4` in
+        // u32, so a size below the header size wraps to ~1e9 entries. Nothing
+        // else in the pipeline validates this chunk.
+        let mut data = binary_manifest();
+        let map = find_chunk(&data, 0x0180).expect("fixture has a resource map");
+        data[map + 2..map + 4].copy_from_slice(&8u16.to_le_bytes());
+        data[map + 4..map + 8].copy_from_slice(&4u32.to_le_bytes());
+        let error = format!("{:#}", decode(&data).unwrap_err());
+        assert!(
+            error.contains("resource map chunk is malformed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Offset of the first chunk of `typ`, walking the fixture's chunk list.
+    fn find_chunk(data: &[u8], typ: u16) -> Option<usize> {
+        let mut offset = 8;
+        while offset + 8 <= data.len() {
+            let chunk_type = u16::from_le_bytes([data[offset], data[offset + 1]]);
+            let size =
+                u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
+            if chunk_type == typ {
+                return Some(offset);
+            }
+            if size == 0 {
+                return None;
+            }
+            offset += size;
+        }
+        None
     }
 
     #[test]

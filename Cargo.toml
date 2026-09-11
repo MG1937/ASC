@@ -3,7 +3,7 @@ name = "rasc"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
-description = "Native Rust rewrite of the reference implementation"
+description = "Native Rust CLI for APK and DEX analysis"
 license = "Apache-2.0"
 
 [dependencies]
@@ -30,3 +30,4 @@ strip = true
 # vendor/axmldecoder/PATCHES.md.
 [patch.crates-io]
 axmldecoder = { path = "vendor/axmldecoder" }
+droidsaw-dex = { path = "vendor/droidsaw-dex" }
