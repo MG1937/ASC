@@ -24,6 +24,7 @@ rasc findrefs app.apk field INSTANCE --class example --fuzzy-class
 # 列出或过滤已定义的类
 rasc classes app.apk
 rasc classes --filter com.example --threads 16 app.apk
+rasc classes --debug app.apk            # 阶段耗时打印到 stderr
 
 # 解码二进制 AndroidManifest.xml
 rasc manifest app.apk
@@ -48,8 +49,9 @@ bash bench/contracts.sh app.apk target/release/rasc   # 含点号/斜杠描述�
 
 # 需要原 Python ASC 检出与其环境：对任意 APK 做与原实现的 parity 对比
 # （类集合、字面量查询行集合必须一致；manifest 比较内容而非格式）
+# 脚本需要 Python 3.10+（系统 python3 可能是 3.9）
 RASC_BIN=target/release/rasc REF_ROOT=/path/to/reference REF_PY=/path/to/python \
-  python3.10+ bench/corpus_parity.py app.apk [more.apk ...]
+  python3 bench/corpus_parity.py app.apk [more.apk ...]
 
 # 健壮性：确定性损坏一个 APK（截断/翻转/DEX 头/中央目录/manifest）并要求
 # rasc 干净报错而不是 panic（退出码不得为崩溃值）
@@ -82,8 +84,8 @@ RASC_BIN=target/release/rasc SAMPLE=1200 \
 | `src/main.rs` | CLI 入口：分发子命令、统一输出（`-o` 与 stdout 同一份字节，`--debug` 只写 stderr） |
 | `src/cli.rs` | 参数定义与校验（clap） |
 | `src/query.rs` | 查询模型与类名归一化，`cli` 与各分析层共用 |
-| `src/zip.rs` | 手写中央目录解析与已知大小解压（libdeflate）；重名条目与退化形态在此处理 |
-| `src/dex/` | DEX 读取与引用扫描（`mod`）、opcode 宽度/种类表（`opcodes`）、操作数预筛（`filter`）、MUTF-8（`mutf8`）、041 容器（`container`） |
+| `src/zip.rs` | 手写中央目录解析；全量解压走 libdeflate，字符串类命令走**流式前缀解压**（系统 zlib，解到够用即停）；重名条目与退化形态在此处理 |
+| `src/dex/` | DEX 读取与引用扫描（`mod`）、opcode 宽度/种类表（`opcodes`）、操作数预筛（`filter`）、MUTF-8（`mutf8`）、041 容器（`container`）、**前缀读取**（`prefix`，只读头部/id 表/class_def/string 段，不足即回退） |
 | `src/apk.rs` | 编排：条目调度（rayon，支持命中即早退）与 `findrefs`/`classes`/`getclass` 入口 |
 | `src/manifest.rs` | 二进制 AXML → XML |
 | `src/bytes.rs` | 有界小端读取 |
@@ -92,12 +94,13 @@ RASC_BIN=target/release/rasc SAMPLE=1200 \
 `dex -> query`。引用搜索不经过反编译依赖，只有 `getclass` 用 `droidsaw-dex`。
 
 `vendor/` 下是两个带补丁的第三方 crate，各带 `PATCHES.md`：`axmldecoder`（字符串池扩展长度、
-CDATA 崩溃）与 `droidsaw-dex`（只解析目标类、跳过只有 emit 消费的工作）。两者的行为都由仓库内
+CDATA 崩溃）与 `droidsaw-dex`（只解析目标类、跳过只有 emit 消费的工作、字符串池并行解码）。两者的行为都由仓库内
 测试与 bench 脚本守着；上游若接受这些改动（`vendor/droidsaw-dex/UPSTREAM.md` 是现成的请求文本），
 vendor 目录即可删除。
 
 ## 性能
 
-见 [PERFORMANCE.md](PERFORMANCE.md)：在 343 MiB 生产 APK 的 11 个真实场景上，相对原
-参考实现的几何平均加速为 **5.7–5.8×**；可用 `bench/compare_vs_reference.py` 复现（三项
-仓库内检查见下：CLI 契约、与原实现的逐 APK parity、畸形输入健壮性）。
+见 [PERFORMANCE.md](PERFORMANCE.md)：在 343 MiB 生产 APK 的 11 个真实场景上，相对参考实现的
+几何平均加速为 **8.0×**（引用搜索 7.1–11.5×、`classes` 23.7×、`manifest` 20.3×、`getclass` 2.7–4.0×）；
+可用 `bench/compare_vs_reference.py` 复现。上面「验证」一节里的脚本覆盖 CLI 契约、逐 APK parity、
+畸形输入健壮性、反编译与参考实现的逐行仲裁 —— 全部可在仓库内复现。

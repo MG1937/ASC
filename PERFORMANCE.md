@@ -89,7 +89,8 @@ rasc 搜索时间的实际构成（用 `--debug` 采集全部 56 个 DEX 的分�
   class_data / code_item / 静态值表，并跳过只有 emit 路径才消费的整包 SHA-1 与 map 段走查：
   9.8 MiB DEX 的解析从 120.7 ms 降到 23.7 ms，而按类的 CFG/SSA 反编译成本（约 21 ms）不变，
   所以 rasc 仍然输出更完整的 Java 风格源码（此处 32 行对 29 行）却整体更快。
-  该改动的安全性由 `bench/decompile_equivalence.py` 守着：基准 APK 的 56 个 DEX 抽样 1176 个类、
+  当前实测（2026-09-12，`--threads 8`，随机器负载浮动）：早期类 45–62 ms、晚期类 77–83 ms、
+  缺失类 52–65 ms。该改动的安全性由 `bench/decompile_equivalence.py` 守着：基准 APK 的 56 个 DEX 抽样 1176 个类、
   4 个真实 APK 再抽 194 个类，与未打补丁的二进制逐字节比对，差异 0（描述符拼写不规范时
   解析器回退到全量解析，不会退化成"没有方法体"的 DEX）。
 * **输出顺序**：rasc 输出确定且有序；原实现的 CLI/编辑器行顺序会随每次运行的 DEX 完成顺序变化。
@@ -100,7 +101,8 @@ rasc 搜索时间的实际构成（用 `--debug` 采集全部 56 个 DEX 的分�
   无法解释为"参考侧截断"时判失败。`bench/mutation_check.py` 200 次确定性损坏 × 全部子命令 = 0 问题。
 * **端到端冒烟（9 个 APK，0.03–974 MB）**：`classes` 全部成功且重复运行逐字节确定，按 DEX 分层的
   抽样 `getclass` 全部成功，`manifest` 与 `findrefs` 全部正常（6 – 567,192 个类；含 974 MB 游戏包、
-  343 MB 与 243 MB 的两个第三方应用包）。`classes` 耗时从 9 ms（0.03 MB）到 505 ms（343 MB）。
+  343 MB 与 243 MB 的两个第三方应用包）。`classes` 耗时：5 ms（0.03 MB / 6 类）、30 ms（974 MB /
+  41,354 类）、74 ms（244 MB / 226,123 类）、**124 ms（343 MB / 567,192 类**，并行排序与渲染前为 505 ms）。
 * **重名 ZIP 条目**：ZIP 允许同名条目（重打包或构造的归档会出现）。原实现的 `classes*.dex`
   扫描按首次出现去重，rasc 现在一致（此前会把两份都扫一遍，凭空多出类与重复行）；而
   `AndroidManifest.xml` 原实现经 CPython `zipfile` 读取（同名取末次），rasc 也已对齐。
