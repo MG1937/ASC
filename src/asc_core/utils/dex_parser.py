@@ -114,7 +114,7 @@ def parse_annotation_item(data, off, hlw_strs, hlw_types, hlw_fields, hlw_method
 def rebuild_encoded_value(elem, im):
     out = bytearray()
     value_type = elem[0]
-    
+
     if value_type in (0x17, 0x18, 0x19, 0x1A, 0x1B):
         idx = elem[1]
         new_idx = 0
