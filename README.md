@@ -10,3 +10,5 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 # Benchmark
 ![Benchmark](./docs/benchmark_all_en.png)
 
+https://github.com/user-attachments/assets/4c4a6813-8561-490c-a573-ef113da861b6
+
