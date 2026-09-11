@@ -1,5 +1,6 @@
 use crate::cli::Query;
 use crate::dex;
+use crate::dex::{read_u16, read_u32};
 use anyhow::{Context, Result, bail};
 use libdeflater::Decompressor;
 use memmap2::Mmap;
@@ -8,9 +9,7 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
-
-type ClassSearchResult = Result<Option<(String, Vec<u8>)>>;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ClassEntry {
@@ -48,85 +47,102 @@ struct ZipEntry {
     compression: u16,
 }
 
-pub fn find_references(
+/// One ZIP entry that has been inflated, plus the timings `--debug` reports.
+struct InflatedDex<'a> {
+    entry: &'a ZipEntry,
+    data: Vec<u8>,
+    started: Instant,
+    inflate_elapsed: Duration,
+}
+
+/// Opens `path`, inflates every `classes*.dex` entry in parallel and returns the
+/// flattened results of `map`, in central-directory order.
+///
+/// `sort_by_size` schedules the smallest entries first, which is what the search
+/// and locate paths want; `stop` lets a caller abandon the remaining entries
+/// (and their inflation) once it already has its answer.
+fn map_dex_entries<T: Send>(
     path: &Path,
-    query: &Query,
     threads: usize,
-    debug: bool,
-) -> Result<Vec<String>> {
+    sort_by_size: bool,
+    stop: Option<&AtomicBool>,
+    map: impl for<'a> Fn(InflatedDex<'a>) -> Result<Vec<T>> + Sync,
+) -> Result<Vec<T>> {
     if threads == 0 {
         bail!("worker count must be greater than zero");
     }
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mmap = unsafe { Mmap::map(&file) }.context("map APK")?;
     let mut entries = parse_dex_entries(&mmap)?;
-    entries.sort_by_key(|entry| entry.compressed_size);
+    if sort_by_size {
+        entries.sort_by_key(|entry| entry.compressed_size);
+    }
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()?;
-    let results: Vec<Result<Vec<String>>> = pool.install(|| {
+    let results: Vec<Result<Vec<T>>> = pool.install(|| {
         entries
             .par_iter()
             .map(|entry| {
+                if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    return Ok(Vec::new());
+                }
                 let started = Instant::now();
                 let data = inflate_entry(&mmap, entry)?;
-                let inflate_elapsed = started.elapsed();
-                let mut rows = Vec::new();
-                for logical in logical_dexes(&entry.name, &data)? {
-                    rows.extend(dex::find_references(&logical.name, &logical.data, query)?);
-                }
-                if debug {
-                    eprintln!(
-                        "[APK] '{}' inflate={:.2} us process={:.2} us",
-                        entry.name,
-                        inflate_elapsed.as_secs_f64() * 1_000_000.0,
-                        (started.elapsed() - inflate_elapsed).as_secs_f64() * 1_000_000.0
-                    );
-                }
-                Ok(rows)
+                map(InflatedDex {
+                    entry,
+                    data,
+                    started,
+                    inflate_elapsed: started.elapsed(),
+                })
             })
             .collect()
     });
-    let mut rows = Vec::new();
+    let mut out = Vec::new();
     for result in results {
-        rows.extend(result?);
+        out.extend(result?);
     }
+    Ok(out)
+}
+
+pub fn find_references(
+    path: &Path,
+    query: &Query,
+    threads: usize,
+    debug: bool,
+) -> Result<Vec<String>> {
+    let mut rows = map_dex_entries(path, threads, true, None, |inflated| {
+        let mut rows = Vec::new();
+        for logical in logical_dexes(&inflated.entry.name, &inflated.data)? {
+            rows.extend(dex::find_references(&logical.name, &logical.data, query)?);
+        }
+        if debug {
+            eprintln!(
+                "[APK] '{}' inflate={:.2} us process={:.2} us",
+                inflated.entry.name,
+                inflated.inflate_elapsed.as_secs_f64() * 1_000_000.0,
+                (inflated.started.elapsed() - inflated.inflate_elapsed).as_secs_f64() * 1_000_000.0
+            );
+        }
+        Ok(rows)
+    })?;
     rows.sort();
     Ok(rows)
 }
 
 pub fn list_classes(path: &Path, threads: usize) -> Result<Vec<ClassEntry>> {
-    if threads == 0 {
-        bail!("worker count must be greater than zero");
-    }
-    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mmap = unsafe { Mmap::map(&file) }.context("map APK")?;
-    let entries = parse_dex_entries(&mmap)?;
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()?;
-    let results: Vec<Result<Vec<ClassEntry>>> = pool.install(|| {
-        entries
-            .par_iter()
-            .map(|entry| {
-                let data = inflate_entry(&mmap, entry)?;
-                let mut classes = Vec::new();
-                for logical in logical_dexes(&entry.name, &data)? {
-                    for descriptor in dex::class_names(&logical.data)? {
-                        classes.push(ClassEntry {
-                            descriptor,
-                            dex_name: logical.name.clone(),
-                        });
-                    }
-                }
-                Ok(classes)
-            })
-            .collect()
-    });
-    let mut classes = Vec::new();
-    for result in results {
-        classes.extend(result?);
-    }
+    let mut classes = map_dex_entries(path, threads, false, None, |inflated| {
+        let mut classes = Vec::new();
+        for logical in logical_dexes(&inflated.entry.name, &inflated.data)? {
+            for descriptor in dex::class_names(&logical.data)? {
+                classes.push(ClassEntry {
+                    descriptor,
+                    dex_name: logical.name.clone(),
+                });
+            }
+        }
+        Ok(classes)
+    })?;
     classes.sort();
     classes.dedup_by(|left, right| left.descriptor == right.descriptor);
     Ok(classes)
@@ -138,56 +154,31 @@ pub fn find_class(
     threads: usize,
     debug: bool,
 ) -> Result<Option<(String, Vec<u8>)>> {
-    if threads == 0 {
-        bail!("worker count must be greater than zero");
-    }
-    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mmap = unsafe { Mmap::map(&file) }.context("map APK")?;
-    let mut entries = parse_dex_entries(&mmap)?;
-    entries.sort_by_key(|entry| entry.compressed_size);
     let stop = AtomicBool::new(false);
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()?;
-    let results: Vec<ClassSearchResult> = pool.install(|| {
-        entries
-            .par_iter()
-            .map(|entry| {
-                if stop.load(Ordering::Relaxed) {
-                    return Ok(None);
-                }
-                let started = Instant::now();
-                let data = inflate_entry(&mmap, entry)?;
-                for logical in logical_dexes(&entry.name, &data)? {
-                    if dex::defines_class(&logical.data, descriptor.as_bytes())? {
-                        stop.store(true, Ordering::Relaxed);
-                        if debug {
-                            eprintln!(
-                                "[APK] '{}' hit=true total={:.2} us",
-                                entry.name,
-                                started.elapsed().as_secs_f64() * 1_000_000.0
-                            );
-                        }
-                        return Ok(Some((logical.name, logical.data.into_owned())));
-                    }
-                }
+    let hits = map_dex_entries(path, threads, true, Some(&stop), |inflated| {
+        for logical in logical_dexes(&inflated.entry.name, &inflated.data)? {
+            if dex::defines_class(&logical.data, descriptor.as_bytes())? {
+                stop.store(true, Ordering::Relaxed);
                 if debug {
                     eprintln!(
-                        "[APK] '{}' hit=false total={:.2} us",
-                        entry.name,
-                        started.elapsed().as_secs_f64() * 1_000_000.0
+                        "[APK] '{}' hit=true total={:.2} us",
+                        inflated.entry.name,
+                        inflated.started.elapsed().as_secs_f64() * 1_000_000.0
                     );
                 }
-                Ok(None)
-            })
-            .collect()
-    });
-    for result in results {
-        if let Some(hit) = result? {
-            return Ok(Some(hit));
+                return Ok(vec![(logical.name, logical.data.into_owned())]);
+            }
         }
-    }
-    Ok(None)
+        if debug {
+            eprintln!(
+                "[APK] '{}' hit=false total={:.2} us",
+                inflated.entry.name,
+                inflated.started.elapsed().as_secs_f64() * 1_000_000.0
+            );
+        }
+        Ok(Vec::new())
+    })?;
+    Ok(hits.into_iter().next())
 }
 
 pub fn decompile_class(
@@ -284,8 +275,18 @@ fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
         .checked_add(entry.compressed_size)
         .context("compressed range overflow")?;
     let compressed = data.get(start..end).context("bad compressed range")?;
-    let output = match entry.compression {
-        0 => compressed.to_vec(),
+    match entry.compression {
+        0 => {
+            if compressed.len() != entry.uncompressed_size {
+                bail!(
+                    "size mismatch for {}: expected {}, got {}",
+                    entry.name,
+                    entry.uncompressed_size,
+                    compressed.len()
+                );
+            }
+            Ok(compressed.to_vec())
+        }
         8 => {
             let mut output = vec![0; entry.uncompressed_size];
             let written = Decompressor::new()
@@ -298,19 +299,10 @@ fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
                     entry.uncompressed_size
                 );
             }
-            output
+            Ok(output)
         }
         method => bail!("unsupported compression method {method} for {}", entry.name),
-    };
-    if output.len() != entry.uncompressed_size {
-        bail!(
-            "size mismatch for {}: expected {}, got {}",
-            entry.name,
-            entry.uncompressed_size,
-            output.len()
-        );
     }
-    Ok(output)
 }
 
 struct LogicalDex<'a> {
@@ -368,22 +360,6 @@ fn logical_dexes<'a>(name: &str, data: &'a [u8]) -> Result<Vec<LogicalDex<'a>>> 
         bail!("malformed DEX 041 logical container");
     }
     Ok(logical)
-}
-
-fn read_u16(data: &[u8], offset: usize) -> Result<u16> {
-    let bytes: [u8; 2] = data
-        .get(offset..offset + 2)
-        .context("truncated u16")?
-        .try_into()?;
-    Ok(u16::from_le_bytes(bytes))
-}
-
-fn read_u32(data: &[u8], offset: usize) -> Result<u32> {
-    let bytes: [u8; 4] = data
-        .get(offset..offset + 4)
-        .context("truncated u32")?
-        .try_into()?;
-    Ok(u32::from_le_bytes(bytes))
 }
 
 #[cfg(test)]

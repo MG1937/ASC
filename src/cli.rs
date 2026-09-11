@@ -156,7 +156,7 @@ pub fn format_class_name(name: &str) -> Result<String> {
     if name.is_empty() {
         bail!("Class name cannot be empty");
     }
-    if name.starts_with('L') && name.ends_with(';') && name.contains('/') {
+    if name.starts_with('L') && name.ends_with(';') {
         return Ok(name.to_owned());
     }
     let mut name = name.replace('.', "/");

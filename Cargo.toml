@@ -15,7 +15,6 @@ libdeflater = "1.26"
 memchr = "2.7"
 memmap2 = "0.9"
 rayon = "1.12"
-regex = "1.12"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

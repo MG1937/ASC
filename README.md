@@ -45,3 +45,5 @@ cargo clippy --all-targets -- -D warnings
 
 见 [PERFORMANCE.md](PERFORMANCE.md)：在 343 MiB 生产 APK 的 11 个真实场景上，相对原
 Python ASC 的几何平均加速为 5.5×；可用 `bench/compare_vs_reference.py` 复现。
+该对比测于早前版本（rasc 主指标 120–130 ms）；此后 rasc 自身主指标降到 110 ms，
+因此实际加速比只会更高。
