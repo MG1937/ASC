@@ -152,6 +152,20 @@ rasc 搜索时间的实际构成（用 `--debug` 采集全部 56 个 DEX 的分�
 晚期类 100.1 → **77.1 ms**（−23%）、`classes` 基准包 226.6 → **184.7 ms**（−18%）；`findrefs` **不变**
 （必须读 code 段，0% 可跳，见下）。7 项命令输出逐字节一致，67 项测试与全部门禁通过。
 
+## 解压后端实测（2026-09-12，同机同一份 456 MiB DEX 数据，输出全部逐字节校验）
+
+| 后端 | 全量 456 MiB（56 条目） | 前缀 145 MiB（31.7%） |
+|---|---:|---:|
+| libdeflate（一次性；rasc 全量路径） | 539–550 ms → **830–846 MB/s** | 无流式 API（其 `InsufficientSpace` 输出不可依赖） |
+| Apple 系统 zlib（流式；rasc 前缀路径） | 627 ms → 727 MB/s | 194 ms → **744 MB/s** |
+| zlib-ng（流式；`WITH_OPTIM/NEON/ARMV8=ON`、`-O3`，已核对 CMakeCache） | 862 ms → **529 MB/s** | 261 ms → 555 MB/s |
+
+结论：在 Apple Silicon 上 libdeflate 仍是全量最快的（比系统 zlib 快 ~16%、比 zlib-ng 快 ~60%）；
+流式前缀用系统 zlib 最划算。zlib-ng 的 SIMD 优势集中在 **x86**、**压缩侧**与**校验和**，
+而 inflate 的热路径是串行 Huffman 解码 + LZ77 拷贝，NEON 能帮的地方有限；且 macOS 的系统 zlib
+本身就是 arm64 深度优化过的分支，所以 zlib-ng 在这台机器上没有位置——这也正是没把它接进 rasc
+构建链（需要 CMake 构 C 库）的原因。换到 x86_64 Linux 排序可能变化，但目标机就是这台。
+
 ## 复现
 
 需要本仓库、一份参考实现 的检出，以及装有 `androguard` 的 Python 环境：
