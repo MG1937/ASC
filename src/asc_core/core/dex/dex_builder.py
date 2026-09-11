@@ -266,6 +266,11 @@ class DexBuilder:
         class_data_off = 0
         if len(self.im.fields_obj) > 0 or len(self.im.methods_obj) > 0:
             class_data_off = len(self.out)
+            # 20260912 here is the root cause for PR ASC/pull/8, code try to make sure diff idx inside class_data_item is valid,
+            # so code sorted every static field and methods, if the list is ordered by idx, there is no way to have diff idx invalid issue.
+            # however the sort behavior cause the static_fields we collected do not match the order of current static_fields ready to writen.
+            # fixed by pin class's own fields before remap fields used by bytecodes
+
             # count
             s_f = sorted([f for f in self.im.fields_obj if f.is_static], key=lambda f: self.im.field_restruct_idx.get(f.index, 0))
             i_f = sorted([f for f in self.im.fields_obj if not f.is_static], key=lambda f: self.im.field_restruct_idx.get(f.index, 0))
