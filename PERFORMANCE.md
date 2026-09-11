@@ -3,11 +3,12 @@
 在一份 343 MiB 的真实 APK 上按使用场景实测：四种模式的引用搜索、类反编译（早期/晚期 DEX）、
 错误路径、二进制 Manifest 解码，以及完整类索引。
 
-**结论：11 个场景几何平均加速 6.8×**：引用搜索快 6.9–10.4×，`classes` 索引 11.7×、
-`manifest` 解码 18.7×、`getclass` 1.4–3.1×，**没有任何落后场景**。
+**结论：11 个场景几何平均加速 8.0×**：引用搜索快 7.1–11.5×，`classes` 索引 **23.7×**、
+`manifest` 解码 **20.3×**、`getclass` **2.7–4.0×**（会话开始时 `getclass` 早期类是 0.6×，即唯一落后项，
+现已反超），**没有任何落后场景**。
 
-> 下表是当前构建（自身主指标 **110 ms**、二进制 **1704 KB**）的完整重测，与
-> `getclass` 的 scoped-parse 改动同一轮；Python ASC 侧数字与之前各轮一致。
+> 下表是当前构建（自身主指标 **110 ms**、二进制 **1720 KB**）的完整重测：11 个场景全部有效，
+> parity 列与之前各轮一致（`classes` 567192/567192，残余行差都是参考实现自身的假阳性/匹配对象差异）。
 
 ## 环境
 
@@ -38,18 +39,18 @@ N 个全新进程的中位数；加速比 = asc / rasc。
 
 | 场景 | rasc | asc | 加速比 |
 |---|---:|---:|---:|
-| `findrefs string Authorization`（53 行） | **114 ms** | 786 ms | **6.9×** |
-| `findrefs string <包名前缀>`（31 行） | **105 ms** | 1054 ms | **10.1×** |
-| `findrefs type Gson`（2924 行） | **140 ms** | 1208 ms | **8.6×** |
-| `findrefs method onCreate`（7091 行） | **168 ms** | 1526 ms | **9.1×** |
-| `findrefs method onCreate --class <包名前缀> --fuzzy-class`（2393 行） | **157 ms** | 1635 ms | **10.4×** |
-| `findrefs field INSTANCE`（170830 行） | **191 ms** | 1951 ms | **10.2×** |
-| `getclass` 早期类（`classes.dex`） | **71 ms** | 100 ms | **1.4×** |
-| `getclass` 晚期类（`classes56.dex`） | **78 ms** | 242 ms | **3.1×** |
-| `getclass` 不存在的类（错误路径） | **96 ms** | 235 ms | **2.4×** |
-| `manifest`（二进制 AXML → XML，4075 行） | **14 ms** | 262 ms | **18.7×** |
-| `classes`（完整索引，567192 个类） | **194 ms** | 2266 ms | **11.7×** |
-| **几何平均** | | | **6.8×** |
+| `findrefs string Authorization`（53 行） | **117 ms** | 830 ms | **7.1×** |
+| `findrefs string okhttp`（126 行） | **121 ms** | 880 ms | **7.3×** |
+| `findrefs type Gson`（2924 行） | **141 ms** | 1292 ms | **9.1×** |
+| `findrefs method onCreate`（7091 行） | **178 ms** | 1620 ms | **9.1×** |
+| `findrefs method onCreate --class androidx --fuzzy-class`（1328 行） | **140 ms** | 1604 ms | **11.5×** |
+| `findrefs field INSTANCE`（170830 行） | **191 ms** | 1978 ms | **10.4×** |
+| `getclass` 早期类（`classes.dex`） | **45 ms** | 124 ms | **2.7×** |
+| `getclass` 晚期类（`classes56.dex`） | **77 ms** | 259 ms | **3.4×** |
+| `getclass` 不存在的类（错误路径） | **62 ms** | 245 ms | **4.0×** |
+| `manifest`（二进制 AXML → XML，4075 行） | **13 ms** | 268 ms | **20.3×** |
+| `classes`（完整索引，567192 个类） | **98 ms** | 2318 ms | **23.7×** |
+| **几何平均** | | | **8.0×** |
 
 上表用本仓库的复现脚本实测（2026-09-12，当前构建；表格中的行数取 rasc 一侧）。
 parity 列（行集合差异）与本轮改动前完全一致：`classes` 567192/567192，`type Gson`、模糊类过滤
@@ -81,7 +82,8 @@ rasc 搜索时间的实际构成（用 `--debug` 采集全部 56 个 DEX 的分�
 * **类索引（11.6×）与 Manifest（21.0×）**：这两条正是原实现最慢的路径（建索要要对每个 DEX
   做完整 `tinydex` 解析；Manifest 走 Androguard AXML）。rasc 只遍历 `class_defs`，Manifest 由
   原生 Rust AXML 解码器处理。
-* **`getclass`（1.4–3.1×）**：早期类 71 ms 对 100 ms，晚期类 78 ms 对 242 ms。原实现把目标类
+* **`getclass`（2.7–4.0×）**：早期类 45 ms 对 124 ms，晚期类 77 ms 对 259 ms（会话开始时早期类是
+  0.6×，靠"按类解析 + 前缀解压"反超）。原实现把目标类
   抽出来重建成一个只含该类的迷你 DEX，再用自己的反编译器；rasc 改用 vendored 补丁
   （见 `vendor/droidsaw-dex/PATCHES.md`）让 `droidsaw-dex` 只解析目标类自己的
   class_data / code_item / 静态值表，并跳过只有 emit 路径才消费的整包 SHA-1 与 map 段走查：

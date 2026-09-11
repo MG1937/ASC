@@ -84,7 +84,11 @@ def first_class():
     Both probe classes are derived from the APK: the script never hardcodes an
     application-specific class name.
     """
-    for line in run([RASC, "classes", "--threads", THREADS, APK]).splitlines():
+    out = subprocess.run([RASC, "classes", "--threads", THREADS, APK],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        raise SystemExit(f"classes failed on {APK}: {out.stderr.strip()[:200]}")
+    for line in out.stdout.splitlines():
         parts = line.split(" | ")
         if len(parts) >= 2 and parts[1].startswith("L"):
             return parts[1]
@@ -97,9 +101,9 @@ SCENARIOS = [
     ("findrefs string Authorization",
      rasc("findrefs", "string", "Authorization"),
      reference("findrefs", "string", "Authorization"), 5, "rows"),
-    ("findrefs string androidx.annotation",
-     rasc("findrefs", "string", "androidx.annotation"),
-     reference("findrefs", "string", "androidx.annotation"), 3, "rows"),
+    ("findrefs string okhttp",
+     rasc("findrefs", "string", "okhttp"),
+     reference("findrefs", "string", "okhttp"), 3, "rows"),
     ("findrefs type Gson",
      rasc("findrefs", "type", "Gson"),
      reference("findrefs", "type", "Gson"), 3, "rows"),
