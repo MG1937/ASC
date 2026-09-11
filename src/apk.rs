@@ -192,7 +192,8 @@ pub fn find_references(
     Ok(rows)
 }
 
-pub fn list_classes(path: &Path, threads: usize) -> Result<Vec<ClassEntry>> {
+pub fn list_classes(path: &Path, threads: usize, debug: bool) -> Result<Vec<ClassEntry>> {
+    let started = Instant::now();
     // One probe decides the prefix policy for the whole archive (see PrefixPolicy).
     let policy: OnceLock<PrefixPolicy> = OnceLock::new();
     let mut classes = map_dex_entries(path, threads, EntryOrder::Natural, None, |inflated| {
@@ -210,8 +211,21 @@ pub fn list_classes(path: &Path, threads: usize) -> Result<Vec<ClassEntry>> {
         }
         Ok(classes)
     })?;
-    classes.sort();
+    let extracted = started.elapsed();
+    // The comparator is the type's total order, so an unstable parallel sort produces
+    // exactly the order a stable sort would - the index has no ties to preserve.
+    classes.par_sort_unstable();
+    let sorted = started.elapsed();
     classes.dedup_by(|left, right| left.descriptor == right.descriptor);
+    if debug {
+        eprintln!(
+            "[classes] entries={} extract={:.2} ms sort={:.2} ms dedup={:.2} ms",
+            classes.len(),
+            extracted.as_secs_f64() * 1e3,
+            (sorted - extracted).as_secs_f64() * 1e3,
+            (started.elapsed() - sorted).as_secs_f64() * 1e3
+        );
+    }
     Ok(classes)
 }
 
@@ -705,7 +719,7 @@ mod tests {
         crate::zip::tests::write_u32(&mut dex, header_size + strings * 4, 1);
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("duplicate-type-id", &zip);
-        let listed = list_classes(&path, 2).unwrap();
+        let listed = list_classes(&path, 2, false).unwrap();
         assert!(
             listed.iter().any(|entry| entry.descriptor == "LFixture0;"),
             "fixture stopped listing the class: {listed:?}"
@@ -725,7 +739,7 @@ mod tests {
         let container = dex::tests::dex041_container(&[2, 1]);
         let zip = build_zip(&[("classes.dex", &container, true)]);
         let path = temp_apk("dex041-classes", &zip);
-        let listed = list_classes(&path, 2).unwrap();
+        let listed = list_classes(&path, 2, false).unwrap();
         // Member one defines LFixture0; and LFixture1;, member two repeats LFixture0;,
         // and the index dedups by descriptor, so the two members' names survive as
         // the first member's (the prefixed name proves the full path ran).

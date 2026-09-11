@@ -15,6 +15,7 @@ mod zip;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use cli::{Cli, Command};
+use rayon::prelude::*;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -91,26 +92,50 @@ fn run() -> Result<()> {
         }
         Command::Classes(args) => {
             let filter = args.filter.as_deref().map(str::to_lowercase);
-            let classes = apk::list_classes(&args.apk_path, args.threads)?;
-            let mut payload = String::new();
-            for class in classes {
-                let java_name = class.java_name().replace('/', ".");
-                if filter
-                    .as_ref()
-                    .is_some_and(|pattern| !java_name.to_lowercase().contains(pattern))
-                {
-                    continue;
-                }
-                payload.push_str(&class.dex_name);
-                payload.push_str(" | ");
-                payload.push_str(&class.descriptor);
-                payload.push_str(" | ");
-                payload.push_str(&java_name);
-                payload.push_str(" | package=");
-                payload.push_str(class.package());
-                payload.push_str(" | class=");
-                payload.push_str(class.simple_name());
-                payload.push('\n');
+            let started = Instant::now();
+            let classes = apk::list_classes(&args.apk_path, args.threads, args.debug)?;
+            let listed = started.elapsed();
+            // Rendering is per-row independent, so the rows are rendered in parallel
+            // chunks (kept in the order they will be printed) and concatenated once.
+            // The filter, the row format and the resulting bytes are unchanged.
+            const RENDER_CHUNK: usize = 8192;
+            let pieces: Vec<String> = classes
+                .par_chunks(RENDER_CHUNK)
+                .map(|chunk| {
+                    let mut payload = String::with_capacity(chunk.len() * 128);
+                    for class in chunk {
+                        let java_name = class.java_name().replace('/', ".");
+                        if filter
+                            .as_ref()
+                            .is_some_and(|pattern| !java_name.to_lowercase().contains(pattern))
+                        {
+                            continue;
+                        }
+                        payload.push_str(&class.dex_name);
+                        payload.push_str(" | ");
+                        payload.push_str(&class.descriptor);
+                        payload.push_str(" | ");
+                        payload.push_str(&java_name);
+                        payload.push_str(" | package=");
+                        payload.push_str(class.package());
+                        payload.push_str(" | class=");
+                        payload.push_str(class.simple_name());
+                        payload.push('\n');
+                    }
+                    payload
+                })
+                .collect();
+            let mut payload = String::with_capacity(pieces.iter().map(String::len).sum());
+            for piece in &pieces {
+                payload.push_str(piece);
+            }
+            if args.debug {
+                eprintln!(
+                    "[classes] render={:.2} ms payload={} MiB (list {:.2} ms)",
+                    started.elapsed().as_secs_f64() * 1e3 - listed.as_secs_f64() * 1e3,
+                    payload.len() / (1 << 20),
+                    listed.as_secs_f64() * 1e3
+                );
             }
             emit(&payload, args.output.as_deref())?;
         }

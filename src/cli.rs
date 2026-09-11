@@ -31,6 +31,9 @@ pub struct ClassesArgs {
     pub filter: Option<String>,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+    /// Print phase timings on stderr.
+    #[arg(long)]
+    pub debug: bool,
     pub apk_path: PathBuf,
 }
 
