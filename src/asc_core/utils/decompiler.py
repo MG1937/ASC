@@ -52,17 +52,15 @@ sys.modules['bisect'] = DummyModule()
 sys.modules['random'] = DummyModule()
 
 
-def _stub_if_unloaded(name):
-    existing = sys.modules.get(name)
-    if existing is not None and type(existing).__name__ != 'DummyModule':
-        return
-    sys.modules[name] = DummyModule()
+def _stub_missing(name):
+    if name not in sys.modules:
+        sys.modules[name] = DummyModule()
 
 
-_stub_if_unloaded('json')
-_stub_if_unloaded('json.scanner')
-_stub_if_unloaded('json.decoder')
-_stub_if_unloaded('json.encoder')
+_stub_missing('json')
+_stub_missing('json.scanner')
+_stub_missing('json.decoder')
+_stub_missing('json.encoder')
 sys.modules['math'] = DummyModule()
 sys.modules['weakref'] = DummyModule()
 

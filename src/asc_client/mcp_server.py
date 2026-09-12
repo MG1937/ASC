@@ -1,4 +1,3 @@
-"""Stdlib MCP server for ASC getclass / findrefs over stdio."""
 import json
 import sys
 
@@ -140,7 +139,6 @@ def run_findrefs(
     fuzzy_class: bool = False,
     threads: int = 8,
     debug: bool = False,
-    use_processes: bool = True,
 ) -> dict:
     from src.asc_client.apk_handler import ApkHandler
 
@@ -175,9 +173,7 @@ def run_findrefs(
 
     apk_handler = ApkHandler(apk_path, debug=debug, max_workers=threads)
     hits = []
-    for _dex_name, batch in apk_handler.for_each_findrefs_hits(
-        find_type, find, use_processes=use_processes
-    ):
+    for _dex_name, batch in apk_handler.for_each_findrefs_hits(find_type, find):
         hits.extend(batch)
     hits.sort(key=lambda h: (h.dex_name, h.caller_class, h.caller_method, h.matched))
     return {
@@ -224,7 +220,6 @@ class McpServer:
             fuzzy_class=bool(arguments.get("fuzzy_class", False)),
             threads=threads,
             debug=self.debug,
-            use_processes=False,
         )
 
     def handle_message(self, message: dict):

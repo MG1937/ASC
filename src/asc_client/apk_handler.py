@@ -443,7 +443,7 @@ class ApkHandler:
                 f"count={len(entries)} workers={self.max_workers}"
             )
 
-    def for_each_findrefs_hits(self, find_type : str, find : dict, *, use_processes : bool = True):
+    def for_each_findrefs_hits(self, find_type : str, find : dict):
         t_start = time.perf_counter()
         fp, mm = self._open_apk()
         try:
@@ -456,46 +456,20 @@ class ApkHandler:
         if not entries:
             return
 
-        if not use_processes:
-            for entry in entries:
-                dex_name, hits, inflate_us, process_us, pid = _findrefs_hits_worker(
-                    self.apk_path, entry, find_type, find
-                )
-                if self.debug:
-                    self._log(
-                        f"[APK] [P{pid}] '{dex_name}' inflate={inflate_us:.2f} us "
-                        f"process={process_us:.2f} us"
-                    )
-                yield dex_name, hits
+        for entry in entries:
+            dex_name, hits, inflate_us, process_us, pid = _findrefs_hits_worker(
+                self.apk_path, entry, find_type, find
+            )
             if self.debug:
-                t_end = time.perf_counter()
                 self._log(
-                    f"[APK] for_each_findrefs_hits total={(t_end - t_start) * 1000000:.2f} us "
-                    f"count={len(entries)} workers=1"
+                    f"[APK] [P{pid}] '{dex_name}' inflate={inflate_us:.2f} us "
+                    f"process={process_us:.2f} us"
                 )
-            return
-
-        with ProcessPoolExecutor(max_workers=self.max_workers) as ex:
-            futures = {}
-            for entry in entries:
-                fut = ex.submit(_findrefs_hits_worker, self.apk_path, entry, find_type, find)
-                futures[fut] = entry[0]
-
-            while futures:
-                done, _pending = wait(list(futures.keys()), return_when=FIRST_COMPLETED)
-                for fut in done:
-                    futures.pop(fut)
-                    dex_name, hits, inflate_us, process_us, pid = fut.result()
-                    if self.debug:
-                        self._log(
-                            f"[APK] [P{pid}] '{dex_name}' inflate={inflate_us:.2f} us "
-                            f"process={process_us:.2f} us"
-                        )
-                    yield dex_name, hits
+            yield dex_name, hits
 
         if self.debug:
             t_end = time.perf_counter()
             self._log(
                 f"[APK] for_each_findrefs_hits total={(t_end - t_start) * 1000000:.2f} us "
-                f"count={len(entries)} workers={self.max_workers}"
+                f"count={len(entries)} workers=1"
             )
