@@ -1,4 +1,7 @@
 import sys
+import types
+
+
 class DummyClass: pass
 class DummyModule:
     __path__ = []
@@ -11,51 +14,71 @@ class DummyModule:
 
 # The dummy import trick bascially gen by LLM 20260607
 
-sys.modules['androguard.core.apk'] = DummyModule()
-sys.modules['networkx'] = DummyModule()
-sys.modules['pygments'] = DummyModule()
-sys.modules['lxml'] = DummyModule()
-sys.modules['asn1crypto'] = DummyModule()
-sys.modules['asn1crypto.x509'] = DummyModule()
-sys.modules['cryptography'] = DummyModule()
-sys.modules['matplotlib'] = DummyModule()
-sys.modules['pydot'] = DummyModule()
-sys.modules['IPython'] = DummyModule()
-sys.modules['colorama'] = DummyModule()
-sys.modules['dateutil'] = DummyModule()
-sys.modules['urllib3'] = DummyModule()
-sys.modules['requests'] = DummyModule()
-sys.modules['idna'] = DummyModule()
-sys.modules['chardet'] = DummyModule()
-sys.modules['certifi'] = DummyModule()
-sys.modules['pkg_resources'] = DummyModule()
+# Install the stubs only for modules that are not already imported. Replacing a real,
+# already imported module (multiprocessing in particular, which concurrent.futures pulls
+# in) breaks every later `import` of it: a stub package has __path__ = [], so
+# `import multiprocessing.connection` raises ModuleNotFoundError and callers that use the
+# placeholder instead fail silently. Dropping a stub that is not needed anyway costs
+# nothing, so this keeps the startup saving without clobbering live modules.
+_STUBBED_MODULES = (
+    'androguard.core.apk',
+    'networkx',
+    'pygments',
+    'lxml',
+    'asn1crypto',
+    'asn1crypto.x509',
+    'cryptography',
+    'matplotlib',
+    'pydot',
+    'IPython',
+    'colorama',
+    'dateutil',
+    'urllib3',
+    'requests',
+    'idna',
+    'chardet',
+    'certifi',
+    'pkg_resources',
+    'loguru',
+    'loguru._logger',
+    'click',
+    'urllib',
+    'urllib.request',
+    'http.client',
+    'email',
+    'email.parser',
+    'email.message',
+    'multiprocessing',
+    'multiprocessing.context',
+    'multiprocessing.reduction',
+    'xml.sax.saxutils',
+    'tempfile',
+    'bz2',
+    'lzma',
+    'shutil',
+    'bisect',
+    'random',
+    'json',
+    'json.scanner',
+    'json.decoder',
+    'json.encoder',
+    'math',
+    'weakref',
+)
+def _install_stub(name):
+    existing = sys.modules.get(name)
+    if existing is not None and not isinstance(existing, DummyModule):
+        # a real module is already loaded: never clobber it with a placeholder
+        return
+    parent = sys.modules.get(name.split('.')[0])
+    if isinstance(parent, types.ModuleType) and not isinstance(parent, DummyModule):
+        # the real parent package is loaded, so this submodule must stay importable
+        return
+    sys.modules[name] = DummyModule()
 
-sys.modules['loguru'] = DummyModule()
-sys.modules['loguru._logger'] = DummyModule()
-sys.modules['click'] = DummyModule()
-sys.modules['urllib'] = DummyModule()
-sys.modules['urllib.request'] = DummyModule()
-sys.modules['http.client'] = DummyModule()
-sys.modules['email'] = DummyModule()
-sys.modules['email.parser'] = DummyModule()
-sys.modules['email.message'] = DummyModule()
-sys.modules['multiprocessing'] = DummyModule()
-sys.modules['multiprocessing.context'] = DummyModule()
-sys.modules['multiprocessing.reduction'] = DummyModule()
-sys.modules['xml.sax.saxutils'] = DummyModule()
 
-sys.modules['tempfile'] = DummyModule()
-sys.modules['bz2'] = DummyModule()
-sys.modules['lzma'] = DummyModule()
-sys.modules['shutil'] = DummyModule()
-sys.modules['bisect'] = DummyModule()
-sys.modules['random'] = DummyModule()
-sys.modules['json'] = DummyModule()
-sys.modules['json.scanner'] = DummyModule()
-sys.modules['json.decoder'] = DummyModule()
-sys.modules['json.encoder'] = DummyModule()
-sys.modules['math'] = DummyModule()
-sys.modules['weakref'] = DummyModule()
+for _name in _STUBBED_MODULES:
+    _install_stub(_name)
 
 from androguard.core.dex import DEX
 import androguard.core.dex as androguard_dex

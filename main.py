@@ -195,8 +195,8 @@ def _build_main_parser():
   python main.py findrefs app.apk string token -o string_refs.txt
   python main.py findrefs app.apk type com.poc.Main
   python main.py findrefs app.apk method onCreate --class com.poc.Main
-  python main.py findrefs app.apk method notify --class openclaw --fuzzy-class -o method_refs.txt
-  python main.py findrefs app.apk field changeQuickRedirect -o field_refs.txt
+  python main.py findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
+  python main.py findrefs app.apk field apiKey -o field_refs.txt
 """,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

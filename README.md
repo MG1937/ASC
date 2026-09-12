@@ -12,3 +12,27 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 https://github.com/user-attachments/assets/4c4a6813-8561-490c-a573-ef113da861b6
 
+# How to use
+```
+usage: main.py [-h] {getclass,findrefs} ...
+
+ASC tooling entry.
+
+positional arguments:
+  {getclass,findrefs}
+    getclass           Locate the target class in APK, extract one DEX in memory, then decompile.
+    findrefs           Find code references for string/type/method/field across all DEX entries in APK.
+
+options:
+  -h, --help           show this help message and exit
+
+examples:
+  python main.py app.apk --gui
+  python main.py getclass app.apk Lcom/poc/Main; -o Main.java
+  python main.py getclass app.apk com.poc.Main --threads 16
+  python main.py findrefs app.apk string token -o string_refs.txt
+  python main.py findrefs app.apk type com.poc.Main
+  python main.py findrefs app.apk method onCreate --class com.poc.Main
+  python main.py findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
+  python main.py findrefs app.apk field apiKey -o field_refs.txt
+```
