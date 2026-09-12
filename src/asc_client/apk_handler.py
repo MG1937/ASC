@@ -2,10 +2,12 @@ import atexit
 import mmap
 import os
 import struct
+import sys
 import threading
 import time
+import types
 import zlib
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, FIRST_COMPLETED, wait
+from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 
 from src.asc_client.dex_container import iter_logical_dex_buffers
 
@@ -24,6 +26,30 @@ _DEFLATE_CHUNK = 1 << 19
 _WORKER_APK_PATH = None
 _WORKER_APK_FP = None
 _WORKER_APK_MM = None
+
+
+def _process_pool_context():
+    """Prefer fork so workers do not have to re-import the whole module graph.
+
+    spawn re-executes the parent's __main__ and re-imports every module a worker
+    touches; measured on the 352MB sample that is 85ms of pool cost versus 19ms for
+    fork. fork is only used when it is safe: never on Windows, and never from a
+    multi-threaded parent (fork() there can deadlock on inherited locks).
+    """
+    if os.name == "nt":
+        return None
+    try:
+        import multiprocessing
+        # decompiler.py stubs optional imports for startup; a stub is not a real
+        # module and would be accepted silently by __getattr__, so verify before
+        # handing it to ProcessPoolExecutor (a bogus context hangs instead of raising)
+        if not isinstance(multiprocessing, types.ModuleType) or not hasattr(multiprocessing, "get_context"):
+            return None
+        if threading.active_count() != 1:
+            return None
+        return multiprocessing.get_context("fork")
+    except (ImportError, ValueError, OSError):
+        return None
 
 
 def _skip_uleb128(buf, off : int) -> int:
@@ -217,18 +243,22 @@ def _get_worker_apk_mm(apk_path : str):
 
 
 def _inflate_deflate_chunks(comp_view, stop_event):
+    if stop_event is None:
+        # nothing to cancel: hand zlib the whole stream in one call instead of
+        # re-entering it every _DEFLATE_CHUNK bytes (measured ~4% faster per dex)
+        return zlib.decompress(comp_view, -15)
     decomp = zlib.decompressobj(-15)
     out = bytearray()
     pos = 0
     total = len(comp_view)
     while pos < total:
-        if stop_event is not None and stop_event.is_set():
+        if stop_event.is_set():
             return None
         end = min(pos + _DEFLATE_CHUNK, total)
         out.extend(decomp.decompress(comp_view[pos:end]))
         pos = end
     out.extend(decomp.flush())
-    if stop_event is not None and stop_event.is_set():
+    if stop_event.is_set():
         return None
     return bytes(out)
 
@@ -385,6 +415,11 @@ class ApkHandler:
             fp.close()
 
     def for_each_findrefs(self, find_type : str, find : dict):
+        # imported before the timer so this once-per-process import is not charged to a
+        # single search; it used to happen at apk_handler import time, and keeping the
+        # getclass path (thread pool only) from paying for it is worth ~8ms of startup
+        from concurrent.futures import ProcessPoolExecutor
+
         t_start = time.perf_counter()
         fp, mm = self._open_apk()
         try:
@@ -397,7 +432,12 @@ class ApkHandler:
         if not entries:
             return
 
-        with ProcessPoolExecutor(max_workers=self.max_workers) as ex:
+        # a forked child inherits whatever is still sitting in the parent's stdio
+        # buffers; flush first so it cannot be emitted a second time on exit
+        sys.stdout.flush()
+        sys.stderr.flush()
+        with ProcessPoolExecutor(max_workers=self.max_workers,
+                                 mp_context=_process_pool_context()) as ex:
             futures = {}
             for entry in entries:
                 fut = ex.submit(_findrefs_worker, self.apk_path, entry, find_type, find)
