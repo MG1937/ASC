@@ -75,6 +75,17 @@ class StringTests(unittest.TestCase):
     def test_last_string_is_searchable(self):
         self.assertEqual(self.locate(make_dex(), 'token'), {5})
 
+    def test_physical_string_order_does_not_change_ids(self):
+        from dex_fixture import uleb
+        data = bytearray(make_dex())
+        ids_off = struct.unpack_from('<I', data, 60)[0]
+        for idx, value in reversed(list(enumerate((b'Lexample/Test;', b'Ljava/lang/Object;', b'V', b'first', b'second', b'token')))):
+            struct.pack_into('<I', data, ids_off + 4 * idx, len(data))
+            data.extend(uleb(len(value)) + value + b'\0')
+        self.assertEqual(self.locate(data, 'token'), {5})
+        self.assertEqual(self.locate(data, 'first'), {3})
+        self.assertEqual(self.locate(data, 'Lexample/Test;'), {0})
+
     def make_strings(self, values, gap=b''):
         from dex_fixture import uleb
         data = bytearray(make_dex())
@@ -85,6 +96,30 @@ class StringTests(unittest.TestCase):
             struct.pack_into('<I', data, ids_off + 4 * idx, len(data))
             data.extend(uleb(len(value)) + value + b'\0')
         return data
+
+    def test_literal_header_hit_does_not_hide_content_hit(self):
+        self.assertEqual(self.locate(self.make_strings([b'A' * 65]), 'A'), {0})
+        self.assertEqual(self.locate(self.make_strings([b'B' * 65]), 'A'), set())
+
+    def test_regex_header_hit_does_not_hide_content_hit(self):
+        self.assertEqual(self.locate(self.make_strings([b'A' * 65]), 'A+'), {0})
+        self.assertEqual(self.locate(self.make_strings([b'B' * 65]), 'A+'), set())
+
+    def test_multibyte_length_and_repeated_hits(self):
+        data = self.make_strings([b'A' * 200 + b'View', b'ViewView'])
+        self.assertEqual(self.locate(data, 'View'), {0, 1})
+        self.assertEqual(self.locate(data, 'V.ew'), {0, 1})
+        self.assertEqual(self.locate(self.make_strings([b'A' * 128]), '\x01'), set())
+
+    def test_bytes_between_strings_are_not_search_results(self):
+        data = self.make_strings([b'first', b'second', b'third'], gap=b'View\0')
+        self.assertEqual(self.locate(data, 'View'), set())
+        self.assertEqual(self.locate(data, 'second'), {1})
+
+    def test_regex_cannot_cross_string_terminators(self):
+        data = self.make_strings([b'AAA', b'BBB'])
+        self.assertEqual(self.locate(data, 'A.*B'), set())
+        self.assertEqual(self.locate(data, 'A\x00\x03B'), set())
 
     def test_empty_string_table(self):
         data = bytearray(make_dex())
