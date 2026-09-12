@@ -50,10 +50,19 @@ sys.modules['lzma'] = DummyModule()
 sys.modules['shutil'] = DummyModule()
 sys.modules['bisect'] = DummyModule()
 sys.modules['random'] = DummyModule()
-sys.modules['json'] = DummyModule()
-sys.modules['json.scanner'] = DummyModule()
-sys.modules['json.decoder'] = DummyModule()
-sys.modules['json.encoder'] = DummyModule()
+
+
+def _stub_if_unloaded(name):
+    existing = sys.modules.get(name)
+    if existing is not None and type(existing).__name__ != 'DummyModule':
+        return
+    sys.modules[name] = DummyModule()
+
+
+_stub_if_unloaded('json')
+_stub_if_unloaded('json.scanner')
+_stub_if_unloaded('json.decoder')
+_stub_if_unloaded('json.encoder')
 sys.modules['math'] = DummyModule()
 sys.modules['weakref'] = DummyModule()
 
