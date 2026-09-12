@@ -80,6 +80,19 @@ assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_clie
                     self.assertEqual(source.returncode, 0, source.stderr)
                     self.assertIn('class Test', source.stdout)
 
+                    json_source = subprocess.run(
+                        [sys.executable, str(ROOT / 'main.py'), 'getclass', str(apk), 'example.Test',
+                         '--threads', '2', '--json'],
+                        cwd=ROOT, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(json_source.returncode, 0, json_source.stderr)
+                    import json
+                    payload = json.loads(json_source.stdout)
+                    self.assertTrue(payload['ok'])
+                    self.assertEqual(payload['command'], 'getclass')
+                    self.assertEqual(payload['class_name'], 'Lexample/Test;')
+                    self.assertEqual(payload['dex_name'], 'classes.dex')
+                    self.assertIn('class Test', payload['source'])
+
     def test_gui_store_can_decompile_twice_and_then_search(self):
         from src.asc_client.gui.runtime import GuiDexStore
         with tempfile.TemporaryDirectory() as directory:

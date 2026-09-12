@@ -12,3 +12,17 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 https://github.com/user-attachments/assets/4c4a6813-8561-490c-a573-ef113da861b6
 
+# JSON output
+
+Add `--json` to either CLI command to emit machine-readable, indented JSON:
+
+```sh
+python main.py getclass app.apk com.poc.Main --json
+python main.py findrefs app.apk string token --json
+python main.py findrefs app.apk method onCreate --class com.poc.Main --json
+```
+
+Successful responses include `"ok": true`; failures include `"ok": false` and
+exit with status 1. With `--json --debug`, diagnostic output is written to
+stderr so stdout remains valid JSON. The `-o` option writes the same JSON to a
+file.
