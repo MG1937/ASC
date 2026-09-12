@@ -9,7 +9,7 @@ import types
 import zlib
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 
-from src.asc_client.dex_container import iter_logical_dex_buffers, is_dex041_container
+from src.asc_client.dex_container import iter_logical_dex_buffers
 
 
 _U16 = struct.Struct("<H")
@@ -58,21 +58,15 @@ def _skip_uleb128(buf, off : int) -> int:
     return off + 1
 
 
-def _read_string_data_bytes(buf, str_off : int, partial = None) -> bytes:
-    # `partial` is a _PartialDex: the dex may only be inflated up to the point
-    # asked for, so a missing terminator means "inflate more", not "malformed".
-    if partial is not None:
-        buf = partial.ensure(str_off + 8)
+def _read_string_data_bytes(buf, str_off : int) -> bytes:
     ptr = _skip_uleb128(buf, str_off)
     end = buf.find(b"\x00", ptr)
-    while end < 0:
-        if partial is None or not partial.grow():
-            raise ValueError("unterminated string_data_item")
-        end = buf.find(b"\x00", ptr)
+    if end < 0:
+        raise ValueError("unterminated string_data_item")
     return buf[ptr:end]
 
 
-def _find_type_idx(buf, target_bytes : bytes, partial = None) -> int:
+def _find_type_idx(buf, target_bytes : bytes) -> int:
     if len(buf) < 0x70 or buf[:3] != b"dex":
         return -1
 
@@ -96,10 +90,10 @@ def _find_type_idx(buf, target_bytes : bytes, partial = None) -> int:
         if str_idx >= string_ids_size:
             raise ValueError("bad type_id->string_idx")
         str_off = _U32_FROM(buf, string_ids_off + (str_idx << 2))[0]
-        if str_off >= len(buf) and partial is None:
+        if str_off >= len(buf):
             raise ValueError("bad string_data_off")
 
-        cls_bytes = _read_string_data_bytes(buf, str_off, partial)
+        cls_bytes = _read_string_data_bytes(buf, str_off)
         if cls_bytes == target_bytes:
             return mid
         if cls_bytes < target_bytes:
@@ -135,156 +129,6 @@ def _dex_defines_class(buf, target_bytes : bytes) -> bool:
     if type_idx < 0:
         return False
     return _class_defs_contains_type_idx(buf, type_idx)
-
-
-class _PartialDex:
-    """A Deflate stream that is inflated only as far as the caller asks.
-
-    Deciding whether a dex defines one class needs the header section (string_ids,
-    type_ids, class_defs) plus the handful of string_data_items the type lookup
-    probes. Those string items sit after the header section, so a dex that does not
-    define the class usually never has to be materialised in full.
-    """
-    __slots__ = ("_comp", "_decomp", "_comp_pos", "_buf")
-
-    def __init__(self, comp_view):
-        self._comp = comp_view
-        self._decomp = zlib.decompressobj(-15)
-        self._comp_pos = 0
-        self._buf = bytearray()
-
-    @property
-    def buf(self):
-        return self._buf
-
-    def ensure(self, end : int):
-        # inflate until at least `end` bytes are available, or the stream drains
-        buf = self._buf
-        comp = self._comp
-        while len(buf) < end and self._comp_pos < len(comp):
-            chunk_end = min(self._comp_pos + _DEFLATE_CHUNK, len(comp))
-            buf += self._decomp.decompress(comp[self._comp_pos:chunk_end])
-            self._comp_pos = chunk_end
-        return buf
-
-    def grow(self) -> bool:
-        # force at least one more chunk in; False once the stream is drained
-        if self._comp_pos >= len(self._comp):
-            return False
-        self.ensure(len(self._buf) + _DEFLATE_CHUNK)
-        return True
-
-    def finish(self) -> bytes:
-        self.ensure(1 << 62)
-        return bytes(self._buf)
-
-
-def _open_partial(mm : mmap.mmap, entry):
-    # stored entries cost one memcpy, so only Deflate benefits from the probe
-    name, _uncomp_size, comp_size, local_header_off, comp_method = entry
-    if comp_method != 8 or mm[local_header_off:local_header_off + 4] != _LH_SIG:
-        return None
-    name_len = _U16_FROM(mm, local_header_off + 26)[0]
-    extra_len = _U16_FROM(mm, local_header_off + 28)[0]
-    data_off = local_header_off + 30 + name_len + extra_len
-    return _PartialDex(memoryview(mm)[data_off:data_off + comp_size])
-
-
-def _probe_defines_class(partial : _PartialDex, target_bytes : bytes):
-    """True/False when the partial buffer proves it, None when it cannot decide.
-
-    A False here is sound: every read either completed inside the inflated prefix
-    or the prefix was grown and the step retried, so a negative can only come from
-    a fully evaluated lookup. None means the caller must inflate the dex normally.
-    """
-    buf = partial.ensure(0x70)
-    if len(buf) < 0x70 or buf[:3] != b"dex":
-        return None
-    if is_dex041_container(buf):
-        # a container needs the whole logical-dex walk
-        return None
-    try:
-        string_ids_size = _U32_FROM(buf, 0x38)[0]
-        string_ids_off = _U32_FROM(buf, 0x3C)[0]
-        type_ids_size = _U32_FROM(buf, 0x40)[0]
-        type_ids_off = _U32_FROM(buf, 0x44)[0]
-        class_defs_size = _U32_FROM(buf, 0x60)[0]
-        class_defs_off = _U32_FROM(buf, 0x64)[0]
-    except struct.error:
-        return None
-    # class_defs has to be fully present before it is searched, otherwise a
-    # truncated search could miss the type and turn into a false negative
-    tables_end = max(string_ids_off + string_ids_size * 4,
-                     type_ids_off + type_ids_size * 4,
-                     class_defs_off + class_defs_size * 32)
-    buf = partial.ensure(tables_end)
-    if len(buf) < tables_end:
-        return None
-    type_idx = _find_type_idx(buf, target_bytes, partial)
-    if type_idx < 0:
-        return False
-    return _class_defs_contains_type_idx(partial.buf, type_idx)
-
-
-# DEX header: field_ids (size, off) and method_ids (size, off)
-_MEMBER_ID_TABLES = {"method": (0x58, 0x5C), "field": (0x50, 0x54)}
-
-
-def _probe_has_class_member(partial : _PartialDex, target_bytes : bytes, kind : str):
-    """True/False when the partial dex proves it, None when it cannot decide.
-
-    A findrefs query constrained to a precise class can only match a dex whose
-    <kind>_ids table holds an entry with that class_idx: the locator answers such a
-    query with exactly the ids whose class_idx is the queried type, so a False here
-    means the dex cannot contribute a reference and can be skipped without being
-    inflated in full. Every read grows the partial buffer on demand, so a negative
-    only comes from a fully evaluated lookup.
-    """
-    size_off, off_off = _MEMBER_ID_TABLES[kind]
-    buf = partial.ensure(0x70)
-    if len(buf) < 0x70 or buf[:3] != b"dex":
-        return None
-    if is_dex041_container(buf):
-        return None
-    try:
-        member_size = _U32_FROM(buf, size_off)[0]
-        member_off = _U32_FROM(buf, off_off)[0]
-    except struct.error:
-        return None
-    if member_size == 0:
-        return False
-    type_idx = _find_type_idx(buf, target_bytes, partial)
-    if type_idx < 0:
-        return False
-    end = member_off + member_size * 8
-    buf = partial.ensure(end)
-    if len(buf) < end:
-        return None
-    # each item is (u16 class_idx, u16 proto/type_idx, u32 name_idx): the class_idx
-    # column is every 4th u16, taken in one C-level unpack + strided slice
-    columns = struct.unpack_from("<%dH" % (member_size * 4), buf, member_off)
-    return type_idx in columns[0::4]
-
-
-def _precise_class_target(find : dict, find_type : str):
-    """The dalvik descriptor this query is constrained to, or None.
-
-    Only a precise (non-fuzzy) class gives the sound necessary condition the probe
-    uses; a fuzzy class needs the whole type-descriptor search, which is the
-    locator's own work and is deliberately not duplicated here.
-    """
-    if find_type not in _MEMBER_ID_TABLES:
-        return None
-    spec = find.get(find_type)
-    if not isinstance(spec, dict):
-        return None
-    clz = spec.get("class")
-    if not isinstance(clz, (list, tuple)) or len(clz) != 2 or clz[1] is not True:
-        return None
-    name = clz[0]
-    if not isinstance(name, str) or not name:
-        return None
-    return name.encode()
 
 
 def _find_eocd(mm : mmap.mmap) -> int:
@@ -448,36 +292,18 @@ def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggreg
 
     mm = _get_worker_apk_mm(apk_path)
     t0 = time.perf_counter()
-    data = None
-    skipped = False
-    target = _precise_class_target(find, find_type)
-    if target is not None:
-        partial = _open_partial(mm, entry)
-        if partial is not None:
-            verdict = _probe_has_class_member(partial, target, find_type)
-            if verdict is False:
-                skipped = True
-            elif verdict is True:
-                # the class is referenced here: finish the stream instead of inflating twice
-                data = partial.finish()
-                if entry[1] and len(data) != entry[1]:
-                    raise ValueError(f"size mismatch: expect {entry[1]}, got {len(data)}")
+    data = _inflate_dex(mm, entry)
     t1 = time.perf_counter()
-    if skipped:
-        return (entry[0], [], (t1 - t0) * 1000000, 0.0, os.getpid())
-    if data is None:
-        data = _inflate_dex(mm, entry)
-    t2 = time.perf_counter()
     lines = []
     handler = AscHandler(False)
     for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
         lines.extend(handler.findrefs(dex_name, dex_buf, find_type, find, aggregate=aggregate))
-    t3 = time.perf_counter()
+    t2 = time.perf_counter()
     return (
         entry[0],
         lines,
-        (t2 - t0) * 1000000,
-        (t3 - t2) * 1000000,
+        (t1 - t0) * 1000000,
+        (t2 - t1) * 1000000,
         os.getpid(),
     )
 
@@ -489,28 +315,9 @@ def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : t
         return False, None, None
 
     t0 = time.perf_counter()
-    data = None
-    proven = False
-    partial = _open_partial(mm, entry)
-    if partial is not None and not stop_event.is_set():
-        verdict = _probe_defines_class(partial, target_bytes)
-        if verdict is False:
-            t1 = time.perf_counter()
-            log(
-                f"[APK] [T{tid:04x}] '{name}' probe={(t1 - t0) * 1000000:.2f} us "
-                f"bytes={len(partial.buf)} skip=True"
-            )
-            return False, None, None
-        if verdict is True:
-            # the class is here: finish the stream instead of inflating twice
-            proven = True
-            data = partial.finish()
-            if entry[1] and len(data) != entry[1]:
-                raise ValueError(f"size mismatch: expect {entry[1]}, got {len(data)}")
+    data = _inflate_dex(mm, entry, stop_event)
     if data is None:
-        data = _inflate_dex(mm, entry, stop_event)
-        if data is None:
-            return False, None, None
+        return False, None, None
     t1 = time.perf_counter()
     if stop_event.is_set():
         return False, None, None
@@ -521,7 +328,7 @@ def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : t
     for dex_name, dex_buf in iter_logical_dex_buffers(name, data):
         if stop_event.is_set():
             return False, None, None
-        if proven or _dex_defines_class(dex_buf, target_bytes):
+        if _dex_defines_class(dex_buf, target_bytes):
             hit = True
             hit_name = dex_name
             hit_data = dex_buf
