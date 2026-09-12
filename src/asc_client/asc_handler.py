@@ -77,7 +77,7 @@ class AscHandler:
         field = dex.fields[idx]
         return f"{field.cls.fullname}->{field.name}"
 
-    def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
+    def findrefs_hits(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
         from src.asc_core.findrefs.findrefs_manager import FindRefManager
         from src.asc_core.utils.tinydex import DEX
 
@@ -99,8 +99,14 @@ class AscHandler:
                     midxs = [midx]
                 matched = self._format_matched_name(dex, find_type, idx)
                 for mid in midxs:
+                    method = dex.methods[mid]
                     ret.append(
-                        f"{dex_name} | {self._format_method(dex, mid)} | matched=({matched})"
+                        {
+                            "dex_name": dex_name,
+                            "caller_class": method.cls.fullname,
+                            "caller_method": method.name,
+                            "matched": [matched],
+                        }
                     )
             return ret
 
@@ -119,11 +125,27 @@ class AscHandler:
 
         ret = []
         for mid in sorted(grouped):
-            matched = "; ".join(
+            matched = [
                 self._format_matched_name(dex, find_type, idx)
                 for idx in sorted(grouped[mid])
-            )
+            ]
+            method = dex.methods[mid]
             ret.append(
-                f"{dex_name} | {self._format_method(dex, mid)} | matched=({matched})"
+                {
+                    "dex_name": dex_name,
+                    "caller_class": method.cls.fullname,
+                    "caller_method": method.name,
+                    "matched": matched,
+                }
             )
         return ret
+
+    def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
+        hits = self.findrefs_hits(dex_name, dex_buf, find_type, find, aggregate=aggregate)
+        return [
+            (
+                f"{hit['dex_name']} | {hit['caller_class']}->{hit['caller_method']} "
+                f"| matched=({'; '.join(hit['matched'])})"
+            )
+            for hit in hits
+        ]

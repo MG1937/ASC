@@ -66,6 +66,34 @@ class ReferenceTests(unittest.TestCase):
         self.assertTrue(any('->first' in line for line in lines))
         self.assertTrue(any('->second' in line for line in lines))
 
+    def test_structured_search_preserves_text_result_fields(self):
+        handler = AscHandler()
+        hits = handler.findrefs_hits('fixture.dex', make_dex(), 'string', {'string': 'token'})
+        self.assertEqual(
+            hits,
+            [
+                {
+                    'dex_name': 'fixture.dex',
+                    'caller_class': 'Lexample/Test;',
+                    'caller_method': 'first',
+                    'matched': ['token'],
+                },
+                {
+                    'dex_name': 'fixture.dex',
+                    'caller_class': 'Lexample/Test;',
+                    'caller_method': 'second',
+                    'matched': ['token'],
+                },
+            ],
+        )
+        self.assertEqual(
+            handler.findrefs('fixture.dex', make_dex(), 'string', {'string': 'token'}),
+            [
+                'fixture.dex | Lexample/Test;->first | matched=(token)',
+                'fixture.dex | Lexample/Test;->second | matched=(token)',
+            ],
+        )
+
 
 class StringTests(unittest.TestCase):
     def locate(self, data, query):

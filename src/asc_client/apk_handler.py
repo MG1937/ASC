@@ -257,7 +257,14 @@ def _inflate_dex(mm : mmap.mmap, entry, stop_event = None):
     return data
 
 
-def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggregate : bool = True):
+def _findrefs_worker(
+    apk_path : str,
+    entry,
+    find_type : str,
+    find : dict,
+    aggregate : bool = True,
+    structured : bool = False,
+):
     from src.asc_client.asc_handler import AscHandler
 
     mm = _get_worker_apk_mm(apk_path)
@@ -267,7 +274,10 @@ def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggreg
     lines = []
     handler = AscHandler(False)
     for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
-        lines.extend(handler.findrefs(dex_name, dex_buf, find_type, find, aggregate=aggregate))
+        if structured:
+            lines.extend(handler.findrefs_hits(dex_name, dex_buf, find_type, find, aggregate=aggregate))
+        else:
+            lines.extend(handler.findrefs(dex_name, dex_buf, find_type, find, aggregate=aggregate))
     t2 = time.perf_counter()
     return (
         entry[0],
@@ -384,7 +394,7 @@ class ApkHandler:
             mm.close()
             fp.close()
 
-    def for_each_findrefs(self, find_type : str, find : dict):
+    def for_each_findrefs(self, find_type : str, find : dict, structured : bool = False):
         t_start = time.perf_counter()
         fp, mm = self._open_apk()
         try:
@@ -400,7 +410,15 @@ class ApkHandler:
         with ProcessPoolExecutor(max_workers=self.max_workers) as ex:
             futures = {}
             for entry in entries:
-                fut = ex.submit(_findrefs_worker, self.apk_path, entry, find_type, find)
+                fut = ex.submit(
+                    _findrefs_worker,
+                    self.apk_path,
+                    entry,
+                    find_type,
+                    find,
+                    True,
+                    structured,
+                )
                 futures[fut] = entry[0]
 
             while futures:
