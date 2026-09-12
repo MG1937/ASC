@@ -9,8 +9,18 @@ import time
 # Auth: MG1937
 _STRUCT_I = struct.Struct('<I')
 
-# r8 using MUTF8 to handle string payload,
-# so 0x00 will be encoded to 0xC0 0x80
+def _overlapping(pattern, submem):
+    pos = 0
+    limit = len(submem)
+    while pos <= limit:
+        match = pattern.search(submem, pos)
+        if match is None:
+            return
+        yield match
+        pos = match.start() + 1
+
+
+# MUTF-8 NUL encoding: 0xC0 0x80
 class StringLocator(BaseLocator):
     def __init__(self, dex):
         super().__init__(dex)
@@ -52,7 +62,8 @@ class StringLocator(BaseLocator):
         literal = bool(string) and b'\x00' not in string and re.escape(string) == string
         pattern = re.compile(string + b'[^\x00]*\x00' if literal else string)
         
-        for match in pattern.finditer(submem):
+        matches = pattern.finditer(submem) if literal else _overlapping(pattern, submem)
+        for match in matches:
             start = strdata_start + match.start()
             content_end = strdata_start + match.end() - 1 if literal else mm.find(b'\x00', start, strdata_end)
             query_end = start + len(string) if literal else strdata_start + match.end()
@@ -79,7 +90,6 @@ class StringLocator(BaseLocator):
         if not self.string_offsets:
             return set()
         located_idx = set(self._match_string_index(string))
-        # return set for O(1) lookup
         self._debug_log("locate", t_start, len(located_idx))
         return located_idx
         

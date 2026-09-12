@@ -101,6 +101,10 @@ class StringTests(unittest.TestCase):
         self.assertEqual(self.locate(self.make_strings([b'A' * 65]), 'A'), {0})
         self.assertEqual(self.locate(self.make_strings([b'B' * 65]), 'A'), set())
 
+    def test_regex_header_hit_does_not_hide_content_hit(self):
+        self.assertEqual(self.locate(self.make_strings([b'A' * 65]), 'A+'), {0})
+        self.assertEqual(self.locate(self.make_strings([b'B' * 65]), 'A+'), set())
+
     def test_multibyte_length_and_repeated_hits(self):
         data = self.make_strings([b'A' * 200 + b'View', b'ViewView'])
         self.assertEqual(self.locate(data, 'View'), {0, 1})
