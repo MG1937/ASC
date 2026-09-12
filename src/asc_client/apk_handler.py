@@ -278,6 +278,27 @@ def _findrefs_worker(apk_path : str, entry, find_type : str, find : dict, aggreg
     )
 
 
+def _findrefs_hits_worker(apk_path : str, entry, find_type : str, find : dict, aggregate : bool = True):
+    from src.asc_client.asc_handler import AscHandler
+
+    mm = _get_worker_apk_mm(apk_path)
+    t0 = time.perf_counter()
+    data = _inflate_dex(mm, entry)
+    t1 = time.perf_counter()
+    hits = []
+    handler = AscHandler(False)
+    for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
+        hits.extend(handler.findrefs_hits(dex_name, dex_buf, find_type, find, aggregate=aggregate))
+    t2 = time.perf_counter()
+    return (
+        entry[0],
+        hits,
+        (t1 - t0) * 1000000,
+        (t2 - t1) * 1000000,
+        os.getpid(),
+    )
+
+
 def _inflate_and_hit(mm : mmap.mmap, entry, target_bytes : bytes, stop_event : threading.Event, log):
     tid = threading.get_ident() & 0xFFFF
     name = entry[0]
@@ -419,5 +440,62 @@ class ApkHandler:
             t_end = time.perf_counter()
             self._log(
                 f"[APK] for_each_findrefs total={(t_end - t_start) * 1000000:.2f} us "
+                f"count={len(entries)} workers={self.max_workers}"
+            )
+
+    def for_each_findrefs_hits(self, find_type : str, find : dict, *, use_processes : bool = True):
+        t_start = time.perf_counter()
+        fp, mm = self._open_apk()
+        try:
+            entries = _parse_cd_dex_entries(mm)
+            entries.sort(key=lambda x: x[2])
+        finally:
+            mm.close()
+            fp.close()
+
+        if not entries:
+            return
+
+        if not use_processes:
+            for entry in entries:
+                dex_name, hits, inflate_us, process_us, pid = _findrefs_hits_worker(
+                    self.apk_path, entry, find_type, find
+                )
+                if self.debug:
+                    self._log(
+                        f"[APK] [P{pid}] '{dex_name}' inflate={inflate_us:.2f} us "
+                        f"process={process_us:.2f} us"
+                    )
+                yield dex_name, hits
+            if self.debug:
+                t_end = time.perf_counter()
+                self._log(
+                    f"[APK] for_each_findrefs_hits total={(t_end - t_start) * 1000000:.2f} us "
+                    f"count={len(entries)} workers=1"
+                )
+            return
+
+        with ProcessPoolExecutor(max_workers=self.max_workers) as ex:
+            futures = {}
+            for entry in entries:
+                fut = ex.submit(_findrefs_hits_worker, self.apk_path, entry, find_type, find)
+                futures[fut] = entry[0]
+
+            while futures:
+                done, _pending = wait(list(futures.keys()), return_when=FIRST_COMPLETED)
+                for fut in done:
+                    futures.pop(fut)
+                    dex_name, hits, inflate_us, process_us, pid = fut.result()
+                    if self.debug:
+                        self._log(
+                            f"[APK] [P{pid}] '{dex_name}' inflate={inflate_us:.2f} us "
+                            f"process={process_us:.2f} us"
+                        )
+                    yield dex_name, hits
+
+        if self.debug:
+            t_end = time.perf_counter()
+            self._log(
+                f"[APK] for_each_findrefs_hits total={(t_end - t_start) * 1000000:.2f} us "
                 f"count={len(entries)} workers={self.max_workers}"
             )

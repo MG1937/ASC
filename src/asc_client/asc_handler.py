@@ -77,7 +77,8 @@ class AscHandler:
         field = dex.fields[idx]
         return f"{field.cls.fullname}->{field.name}"
 
-    def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
+    def findrefs_hits(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
+        from src.asc_client.results import FindRefHit
         from src.asc_core.findrefs.findrefs_manager import FindRefManager
         from src.asc_core.utils.tinydex import DEX
 
@@ -97,10 +98,16 @@ class AscHandler:
                     midxs = midx
                 else:
                     midxs = [midx]
-                matched = self._format_matched_name(dex, find_type, idx)
+                matched = (self._format_matched_name(dex, find_type, idx),)
                 for mid in midxs:
+                    method = dex.methods[mid]
                     ret.append(
-                        f"{dex_name} | {self._format_method(dex, mid)} | matched=({matched})"
+                        FindRefHit(
+                            dex_name=dex_name,
+                            caller_class=method.cls.fullname,
+                            caller_method=method.name,
+                            matched=matched,
+                        )
                     )
             return ret
 
@@ -119,11 +126,25 @@ class AscHandler:
 
         ret = []
         for mid in sorted(grouped):
-            matched = "; ".join(
+            matched = tuple(
                 self._format_matched_name(dex, find_type, idx)
                 for idx in sorted(grouped[mid])
             )
+            method = dex.methods[mid]
             ret.append(
-                f"{dex_name} | {self._format_method(dex, mid)} | matched=({matched})"
+                FindRefHit(
+                    dex_name=dex_name,
+                    caller_class=method.cls.fullname,
+                    caller_method=method.name,
+                    matched=matched,
+                )
             )
         return ret
+
+    def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
+        from src.asc_client.results import format_findref_hit
+
+        return [
+            format_findref_hit(hit)
+            for hit in self.findrefs_hits(dex_name, dex_buf, find_type, find, aggregate=aggregate)
+        ]
