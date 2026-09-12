@@ -120,6 +120,94 @@ OPCODE_PATTERNS = {
 
 _STRUCT_I = struct.Struct('<I')
 _STRUCT_H = struct.Struct('<H')
+_UNPACK_I = _STRUCT_I.unpack_from
+_UNPACK_H = _STRUCT_H.unpack_from
+
+# scan type -> tuple of (opcode byte class, referenced idx width in bytes)
+# the referenced idx always starts two bytes after its opcode byte
+_IDX_GROUPS = {
+        "string" : ((b"[\x1a]", 2), (b"[\x1b]", 4)),
+        "type" : ((b"[\x1c\x1f\x20\x22\x23\x24\x25]", 2),),
+        "field" : ((b"[\x52-\x6d]", 2),),
+        "method" : ((b"[\x6e-\x72\x74-\x78\xfa\xfb]", 2),)
+        }
+
+_ANY_BYTE = b"[\x00-\xff]"
+_CLASS_SPECIAL = frozenset(b"\\]^-[")
+
+
+def _escape_class_byte(value : int) -> bytes:
+    if value in _CLASS_SPECIAL:
+        return b"\\" + bytes([value])
+    return bytes([value])
+
+
+def _byte_class(values) -> bytes:
+    # compact regex character class matching exactly the given byte values
+    values = sorted(set(values))
+    total = len(values)
+    if total == 256:
+        return _ANY_BYTE
+    out = bytearray(b"[")
+    index = 0
+    while index < total:
+        last = index
+        while last + 1 < total and values[last + 1] == values[last] + 1:
+            last += 1
+        if last - index >= 2:
+            out += _escape_class_byte(values[index]) + b"-" + _escape_class_byte(values[last])
+        else:
+            for pos in range(index, last + 1):
+                out += _escape_class_byte(values[pos])
+        index = last + 1
+    out += b"]"
+    return bytes(out)
+
+
+def _build_scan_pattern(opcode_class : bytes, idx_width : int, idxs):
+    # the raw byte scan is a filter: requiring the bytes after the opcode to look
+    # like a referenced idx lets the C regex engine drop almost every false
+    # positive before python sees it. survivors are checked exactly by the caller.
+    lookahead = _ANY_BYTE
+    for shift in range(0, idx_width * 8, 8):
+        lookahead += _byte_class({(idx >> shift) & 0xFF for idx in idxs})
+    return re.compile(opcode_class + b"(?=" + lookahead + b")")
+
+
+def _expand_class(opcode_class : bytes) -> bytes:
+    # b"[\x52-\x6d]" -> the bytes it matches
+    out = bytearray()
+    index = 1
+    end = len(opcode_class) - 1
+    while index < end:
+        if index + 2 < end and opcode_class[index + 1: index + 2] == b"-":
+            out += bytes(range(opcode_class[index], opcode_class[index + 2] + 1))
+            index += 3
+        else:
+            out.append(opcode_class[index])
+            index += 1
+    return bytes(out)
+
+
+_OPCODE_VALUES = {}
+for _groups in _IDX_GROUPS.values():
+    for _class, _width in _groups:
+        _OPCODE_VALUES[_class] = _expand_class(_class)
+
+# CPython compiles a one character class to a literal and scans for it with memchr
+# (measured 0.47 ns/byte); with two or more characters it falls back to the regex VM
+# loop (3.5-6.5 ns/byte), which the translate prefilter below beats outright. So the
+# switch is at two opcodes: the string type's two single-opcode groups keep the regex,
+# every other class (7 type, 11 method, 28 field opcodes) uses the prefilter.
+# Measured on a 3.21MB code region, regex vs prefilter: field 20.0 vs 10.1ms (-50%),
+# method 10.4 vs 8.3ms (-20%), type 20.5 vs 18.1ms (-12%), string 3.0 vs 10.6ms.
+_DENSE_OPCODE_COUNT = 2
+
+
+def _mask_table(values) -> bytes:
+    # 256 entry 0/1 table used by bytes.translate below
+    wanted = set(values)
+    return bytes([1 if byte in wanted else 0 for byte in range(256)])
 
 class CodeItemScanner:
     # when we decide to scan code item, means we already build up the insn locator
@@ -130,46 +218,65 @@ class CodeItemScanner:
         self.buf = self.insn_locator.buf
         self.submem = self.buf[self.off_start: self.off_end]
 
+    # dense opcode classes: a bytes.translate per byte position plus a bigint AND
+    # replaces the regex charset scan. Only the opcode byte and the high idx byte are
+    # masked: the low idx byte class is nearly the whole byte range for a realistic
+    # target set, so masking it removed only a few thousand python iterations while
+    # costing two more full passes over the region (measured -5% to -22% without it).
+    # The exact idx check below still runs on every survivor.
+    def _scan_code_item_dense(self, opcode_values : bytes, idxs : set, mark, matched_offset, mark_idx):
+        off_start = self.off_start
+        raw = self.submem.tobytes()
+        # slicing the raw bytes by the idx offset aligns the low/high masks onto the
+        # opcode position. A slice is a memcpy while the equivalent bigint shift walks
+        # every limb of the region, which measured ~1ms extra per shift on 3.2MB.
+        op_hits = int.from_bytes(raw.translate(_mask_table(opcode_values)), "little")
+        hi_hits = int.from_bytes(raw[3:].translate(_mask_table((idx >> 8) & 0xFF for idx in idxs)), "little")
+        hits = (op_hits & hi_hits).to_bytes(len(raw), "little")
+        submem = self.submem
+        start = hits.find(1)
+        while start != -1:
+            idx = _UNPACK_H(submem, start + 2)[0]
+            if idx in idxs:
+                matched_offset.append(start + off_start)
+                if mark:
+                    mark_idx.append(idx)
+            start = hits.find(1, start + 1)
+
     # if mark is True, record correspond idx for offset
     def _scan_code_item(self, idx_type : str, idxs : set, mark):
         off_start = self.off_start
         submem = self.submem
-        buf_len = len(submem)
         matched_offset = []
         mark_idx = []
         self.mark_idx = mark_idx
 
-        if idx_type == "string":
-            for match in STRINGIDX_OPS.finditer(submem):
-                # buggy, might have oob issue 20260617
-                idx_off = match.start() + 2
-                if match.group() == b'\x1a':
-                    if (idx_off + 2) > buf_len: # bugfix for oob, dont use try-except, bad performance.. 20260729
-                        return matched_offset
-                    idx = _STRUCT_H.unpack_from(submem, idx_off)[0]
-                else: # const-string/jumbo
-                    if (idx_off + 4) > buf_len:
-                        return matched_offset
-                    idx = _STRUCT_I.unpack_from(submem, idx_off)[0]
+        groups = _IDX_GROUPS[idx_type]
+        for opcode_class, idx_width in groups:
+            opcode_values = _OPCODE_VALUES[opcode_class]
+            if idx_width == 2 and len(opcode_values) >= _DENSE_OPCODE_COUNT:
+                self._scan_code_item_dense(opcode_values, idxs, mark, matched_offset, mark_idx)
+                continue
+            pattern = _build_scan_pattern(opcode_class, idx_width, idxs)
+            unpack_from = _UNPACK_I if idx_width == 4 else _UNPACK_H
+            for match in pattern.finditer(submem):
+                start = match.start()
+                # the idx bytes were prefiltered in C, the exact value still
+                # decides whether this opcode really references a target idx
+                idx = unpack_from(submem, start + 2)[0]
                 if idx not in idxs:
                     continue
-                matched_offset.append(idx_off + off_start - 2)
+                matched_offset.append(start + off_start)
                 if mark:
                     mark_idx.append(idx)
-            return matched_offset
-        else:
-            for match in OPCODE_PATTERNS[idx_type].finditer(submem):
-                # buggy, might have oob issue 20260617
-                idx_off = match.start() + 2
-                if (idx_off + 2) > buf_len:
-                    return matched_offset
-                idx = _STRUCT_H.unpack_from(submem, idx_off)[0]
-                if idx not in idxs:
-                    continue
-                matched_offset.append(idx_off + off_start - 2)
-                if mark:
-                    mark_idx.append(idx)
-            return matched_offset
+
+        if len(groups) > 1:
+            # separate scans per idx width break offset order, restore it
+            order = sorted(range(len(matched_offset)), key=matched_offset.__getitem__)
+            matched_offset = [matched_offset[i] for i in order]
+            if mark:
+                mark_idx[:] = [mark_idx[i] for i in order]
+        return matched_offset
 
     # scan struct: {"string": {idx1, idx2...}, "field": ...,}
     # only handle with string idx, field idx, method idx, type idx
