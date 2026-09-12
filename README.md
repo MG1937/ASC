@@ -12,3 +12,40 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 https://github.com/user-attachments/assets/4c4a6813-8561-490c-a573-ef113da861b6
 
+# Machine-readable output
+
+Emit JSON from the same `getclass` / `findrefs` commands agents already know:
+
+```sh
+python main.py getclass app.apk com.poc.Main --json
+python main.py findrefs app.apk string token --json
+```
+
+Success envelopes look like `{"ok": true, "command": "...", ...}`. Failures look like `{"ok": false, "error": "..."}` on stdout with exit code 1. Debug logs stay on stderr when `--json` is set.
+
+# MCP (stdio)
+
+Serve the same operations over MCP for Cursor and other clients:
+
+```sh
+python main.py mcp --apk /path/to/app.apk
+```
+
+Cursor `mcpServers` example:
+
+```json
+{
+  "mcpServers": {
+    "droid-asc": {
+      "command": "python",
+      "args": ["/absolute/path/to/ASC/main.py", "mcp", "--apk", "/absolute/path/to/app.apk"]
+    }
+  }
+}
+```
+
+Tools:
+
+- `get_class` with `class_name` (and optional `apk_path`, `threads`)
+- `find_refs` with `find_type` (`string` | `type` | `method` | `field`), optional `value` / `class_name` / `fuzzy_class` / `apk_path` / `threads`
+

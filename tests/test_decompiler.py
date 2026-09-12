@@ -41,6 +41,7 @@ class RebuildTests(unittest.TestCase):
 class DecompilerTests(unittest.TestCase):
     def test_decompile_keeps_dummy_fast_path_and_class_zero(self):
         script = """
+import json
 import sys
 sys.path.insert(0, 'tests')
 from dex_fixture import make_dex
@@ -52,6 +53,8 @@ for _ in range(2):
     assert 'class Test' in source
     assert 'void first()' in source
     assert 'void second()' in source
+assert json.dumps({'ok': True}) == '{"ok": true}'
+assert type(sys.modules['json']).__name__ != 'DummyModule'
 for name in ('email', 'xml.sax.saxutils', 'networkx', 'loguru'):
     assert type(sys.modules[name]).__name__ == 'DummyModule', name
     assert not any(module == name or module.startswith(name + '.') for module in loaded), name
@@ -79,6 +82,19 @@ assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_clie
                         cwd=ROOT, capture_output=True, text=True, timeout=30)
                     self.assertEqual(source.returncode, 0, source.stderr)
                     self.assertIn('class Test', source.stdout)
+                    self.assertNotEqual(source.stdout.lstrip()[:1], '{')
+
+                    json_source = subprocess.run(
+                        [sys.executable, str(ROOT / 'main.py'), 'getclass', str(apk), 'example.Test',
+                         '--threads', '2', '--json'],
+                        cwd=ROOT, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(json_source.returncode, 0, json_source.stderr)
+                    import json
+                    payload = json.loads(json_source.stdout)
+                    self.assertTrue(payload['ok'])
+                    self.assertEqual(payload['class_name'], 'Lexample/Test;')
+                    self.assertIn('dex_name', payload)
+                    self.assertIn('class Test', payload['source'])
 
     def test_gui_store_can_decompile_twice_and_then_search(self):
         from src.asc_client.gui.runtime import GuiDexStore

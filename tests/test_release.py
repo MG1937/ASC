@@ -42,3 +42,11 @@ class ReleaseTests(unittest.TestCase):
                                         cwd=root, capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(expected, result.stdout)
+            json_result = subprocess.run(
+                [sys.executable, str(app / 'main.py'), 'findrefs', str(apk), 'string', 'token', '--json'],
+                cwd=root, capture_output=True, text=True, timeout=30)
+            self.assertEqual(json_result.returncode, 0, json_result.stderr)
+            import json
+            payload = json.loads(json_result.stdout)
+            self.assertTrue(payload['ok'])
+            self.assertEqual(len(payload['hits']), 2)

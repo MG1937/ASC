@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -53,7 +54,26 @@ def _get_find_query(args) -> tuple:
     return "field", _build_member_find("field", args.class_name, args.fuzzy_class, args.name)
 
 
+def _emit_json(payload : dict, output_path=None):
+    text = json.dumps(payload, ensure_ascii=False) + "\n"
+    sys.stdout.write(text)
+    if output_path:
+        with open(output_path, "w", encoding="utf-8", errors="replace", newline="\n") as fp:
+            fp.write(text)
+
+
 def _handle_getclass(args):
+    from src.asc_client.mcp_server import run_getclass
+
+    if getattr(args, "json", False):
+        body = run_getclass(args.apk_path, args.dalvik_class, threads=args.threads, debug=args.debug)
+        if args.debug:
+            t_end = time.perf_counter()
+            print(f"[DEBUG] Hit DEX: {body['dex_name']}", file=sys.stderr)
+            print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us", file=sys.stderr)
+        _emit_json(body, args.output)
+        return
+
     from src.asc_client.apk_handler import ApkHandler
 
     dalvik_class = _format_class_name(args.dalvik_class)
@@ -85,10 +105,32 @@ def _handle_getclass(args):
 
 
 def _handle_findrefs(args):
+    find_type, find = _get_find_query(args)
+
+    if getattr(args, "json", False):
+        from src.asc_client.mcp_server import run_findrefs
+
+        value = getattr(args, "value", None)
+        if value is None:
+            value = getattr(args, "name", None)
+        body = run_findrefs(
+            args.apk_path,
+            find_type,
+            value=value,
+            class_name=getattr(args, "class_name", None),
+            fuzzy_class=bool(getattr(args, "fuzzy_class", False)),
+            threads=args.threads,
+            debug=args.debug,
+        )
+        if args.debug:
+            t_end = time.perf_counter()
+            print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us", file=sys.stderr)
+        _emit_json(body, args.output)
+        return
+
     from src.asc_client.apk_handler import ApkHandler
 
     apk_handler = ApkHandler(args.apk_path, debug=args.debug, max_workers=args.threads)
-    find_type, find = _get_find_query(args)
 
     output_fp = None
     if args.output:
@@ -109,6 +151,12 @@ def _handle_findrefs(args):
     if args.debug:
         t_end = time.perf_counter()
         print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us")
+
+
+def _handle_mcp(args):
+    from src.asc_client.mcp_server import serve_stdio
+
+    serve_stdio(default_apk=args.apk, threads=args.threads, debug=args.debug)
 
 
 def _run_gui(argv):
@@ -172,16 +220,29 @@ def main():
     args = parser.parse_args()
 
     try:
-        if args.command == "getclass":
+        if args.command == "mcp":
+            _handle_mcp(args)
+        elif args.command == "getclass":
             _handle_getclass(args)
         else:
             _handle_findrefs(args)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        if getattr(args, "json", False):
+            _emit_json({"ok": False, "error": str(e)}, getattr(args, "output", None))
+        else:
+            print(f"Error: {e}", file=sys.stderr)
         if args.debug:
             import traceback
             traceback.print_exc()
         sys.exit(1)
+
+
+def _add_json_flag(parser):
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a JSON envelope on stdout instead of text.",
+    )
 
 
 def _build_main_parser():
@@ -191,8 +252,9 @@ def _build_main_parser():
         epilog="""examples:
   python main.py app.apk --gui
   python main.py getclass app.apk Lcom/poc/Main; -o Main.java
-  python main.py getclass app.apk com.poc.Main --threads 16
-  python main.py findrefs app.apk string token -o string_refs.txt
+  python main.py getclass app.apk com.poc.Main --json
+  python main.py findrefs app.apk string token --json
+  python main.py mcp --apk app.apk
   python main.py findrefs app.apk type com.poc.Main
   python main.py findrefs app.apk method onCreate --class com.poc.Main
   python main.py findrefs app.apk method notify --class openclaw --fuzzy-class -o method_refs.txt
@@ -208,11 +270,13 @@ def _build_main_parser():
         epilog="""examples:
   python main.py getclass app.apk Lcom/poc/Main;
   python main.py getclass app.apk com.poc.Main -o Main.java
+  python main.py getclass app.apk com.poc.Main --json
   python main.py getclass app.apk com.poc.Main --threads 16 --debug
 """,
     )
     getclass_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
     getclass_parser.add_argument("--threads", "--thread", type=int, default=8, help="Worker thread count.")
+    _add_json_flag(getclass_parser)
     getclass_parser.add_argument("-o", "--output", help="Also write decompiled output to this file.")
     getclass_parser.add_argument("apk_path", help="Path to the input APK file.")
     getclass_parser.add_argument("dalvik_class", help="The Dalvik format class name to extract (e.g., Lcom/poc/Main;).")
@@ -223,6 +287,7 @@ def _build_main_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   python main.py findrefs app.apk string token -o string_refs.txt
+  python main.py findrefs app.apk string token --json
   python main.py findrefs app.apk type com.poc.Main
   python main.py findrefs app.apk method onCreate --class com.poc.Main
   python main.py findrefs app.apk method notify --class openclaw --fuzzy-class -o method_refs.txt
@@ -243,6 +308,7 @@ def _build_main_parser():
   python main.py findrefs app.apk string Authorization -o string_refs.txt
 """,
     )
+    _add_json_flag(string_parser)
     string_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
     string_parser.add_argument("value", help="Fuzzy string pattern.")
 
@@ -255,6 +321,7 @@ def _build_main_parser():
   python main.py findrefs app.apk type Lcom/poc/Main; -o type_refs.txt
 """,
     )
+    _add_json_flag(type_parser)
     type_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
     type_parser.add_argument("value", help="Fuzzy type pattern.")
 
@@ -268,6 +335,7 @@ def _build_main_parser():
   python main.py findrefs app.apk method notify --class poc --fuzzy-class -o method_refs.txt
 """,
     )
+    _add_json_flag(method_parser)
     method_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
     method_parser.add_argument("name", nargs="?", default=None, help="Fuzzy method name.")
     method_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
@@ -283,10 +351,24 @@ def _build_main_parser():
   python main.py findrefs app.apk field token --class poc --fuzzy-class -o field_refs.txt
 """,
     )
+    _add_json_flag(field_parser)
     field_parser.add_argument("-o", "--output", help="Also write reference search output to this file.")
     field_parser.add_argument("name", nargs="?", default=None, help="Fuzzy field name.")
     field_parser.add_argument("--class", dest="class_name", default=None, help="Dalvik class or fuzzy class pattern.")
     field_parser.add_argument("--fuzzy-class", action="store_true", help="Treat --class as fuzzy match.")
+
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Serve get_class and find_refs over MCP stdio (JSON-RPC with Content-Length framing).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py mcp
+  python main.py mcp --apk app.apk --threads 8
+""",
+    )
+    mcp_parser.add_argument("--apk", default=None, help="Default APK path for tools that omit apk_path.")
+    mcp_parser.add_argument("--threads", "--thread", type=int, default=8, help="Default worker count.")
+    mcp_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output on stderr.")
     return parser
 
 
