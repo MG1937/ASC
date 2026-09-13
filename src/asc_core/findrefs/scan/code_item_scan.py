@@ -123,13 +123,14 @@ _STRUCT_H = struct.Struct('<H')
 _UNPACK_I = _STRUCT_I.unpack_from
 _UNPACK_H = _STRUCT_H.unpack_from
 
-# scan type -> tuple of (opcode byte class, referenced idx width in bytes)
+# scan type -> tuple of (opcode byte values, referenced idx width in bytes)
 # the referenced idx always starts two bytes after its opcode byte
 _IDX_GROUPS = {
-        "string" : ((b"[\x1a]", 2), (b"[\x1b]", 4)),
-        "type" : ((b"[\x1c\x1f\x20\x22\x23\x24\x25]", 2),),
-        "field" : ((b"[\x52-\x6d]", 2),),
-        "method" : ((b"[\x6e-\x72\x74-\x78\xfa\xfb]", 2),)
+        "string" : ((b"\x1a", 2), (b"\x1b", 4)),
+        "type" : ((b"\x1c\x1f\x20\x22\x23\x24\x25", 2),),
+        "field" : ((bytes(range(0x52, 0x6e)), 2),),
+        "method" : ((bytes(range(0x6e, 0x73)) +
+                     bytes(range(0x74, 0x79)) + b"\xfa\xfb", 2),)
         }
 
 _ANY_BYTE = b"[\x00-\xff]"
@@ -174,31 +175,11 @@ def _build_scan_pattern(opcode_class : bytes, idx_width : int, idxs):
     return re.compile(opcode_class + b"(?=" + lookahead + b")")
 
 
-def _expand_class(opcode_class : bytes) -> bytes:
-    # b"[\x52-\x6d]" -> the bytes it matches
-    out = bytearray()
-    index = 1
-    end = len(opcode_class) - 1
-    while index < end:
-        if index + 2 < end and opcode_class[index + 1: index + 2] == b"-":
-            out += bytes(range(opcode_class[index], opcode_class[index + 2] + 1))
-            index += 3
-        else:
-            out.append(opcode_class[index])
-            index += 1
-    return bytes(out)
-
-
-_OPCODE_VALUES = {}
-for _groups in _IDX_GROUPS.values():
-    for _class, _width in _groups:
-        _OPCODE_VALUES[_class] = _expand_class(_class)
-
 # CPython compiles a one character class to a literal and scans for it with memchr
 # (measured 0.47 ns/byte); with two or more characters it falls back to the regex VM
 # loop (3.5-6.5 ns/byte), which the translate prefilter below beats outright. So the
 # switch is at two opcodes: the string type's two single-opcode groups keep the regex,
-# every other class (7 type, 11 method, 28 field opcodes) uses the prefilter.
+# every other class (7 type, 12 method, 28 field opcodes) uses the prefilter.
 # Measured on a 3.21MB code region, regex vs prefilter: field 20.0 vs 10.1ms (-50%),
 # method 10.4 vs 8.3ms (-20%), type 20.5 vs 18.1ms (-12%), string 3.0 vs 10.6ms.
 _DENSE_OPCODE_COUNT = 2
@@ -252,12 +233,11 @@ class CodeItemScanner:
         self.mark_idx = mark_idx
 
         groups = _IDX_GROUPS[idx_type]
-        for opcode_class, idx_width in groups:
-            opcode_values = _OPCODE_VALUES[opcode_class]
+        for opcode_values, idx_width in groups:
             if idx_width == 2 and len(opcode_values) >= _DENSE_OPCODE_COUNT:
                 self._scan_code_item_dense(opcode_values, idxs, mark, matched_offset, mark_idx)
                 continue
-            pattern = _build_scan_pattern(opcode_class, idx_width, idxs)
+            pattern = _build_scan_pattern(_byte_class(opcode_values), idx_width, idxs)
             unpack_from = _UNPACK_I if idx_width == 4 else _UNPACK_H
             for match in pattern.finditer(submem):
                 start = match.start()
