@@ -421,7 +421,7 @@ class GuiDexStore:
             "result_path": result_path,
         }
 
-        cmd = [sys.executable, "-m", "src.asc_client.gui.search_worker"]
+        cmd = [sys.executable, "-m", "droidasc.asc_client.gui.search_worker"]
         creationflags = 0
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)

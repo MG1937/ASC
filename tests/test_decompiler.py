@@ -93,3 +93,16 @@ assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_clie
             self.assertEqual(store.get_source('Lexample/Test;'), first)
             self.assertIn('class Test', first[1])
             self.assertTrue(store.search_members('method', 'first'))
+
+    def test_gui_store_subprocess_search_uses_package_module(self):
+        from droidasc.asc_client.gui.runtime import GuiDexStore
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / 'fixture.apk'
+            with zipfile.ZipFile(apk, 'w') as archive:
+                archive.writestr('classes.dex', make_dex())
+            store = GuiDexStore(str(apk), max_workers=1)
+            store.load()
+            result = store.search('string', 'token', max_workers=1)
+            self.assertEqual(result['backend'], 'subprocess')
+            self.assertEqual(result['total_hits'], 2)
+            self.assertEqual(len(result['results']), 2)
