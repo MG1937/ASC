@@ -84,6 +84,22 @@ def _handle_getclass(args):
     print(source_code)
 
 
+def _handle_getmanifest(args):
+    from src.asc_client.manifest_handler import get_manifest_xml
+
+    xml = get_manifest_xml(args.apk_path, pretty=True)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", errors="replace", newline="\n") as fp:
+            fp.write(xml)
+            if not xml.endswith("\n"):
+                fp.write("\n")
+    print(xml)
+
+    if args.debug:
+        t_end = time.perf_counter()
+        print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us")
+
+
 def _handle_findrefs(args):
     from src.asc_client.apk_handler import ApkHandler
 
@@ -174,6 +190,8 @@ def main():
     try:
         if args.command == "getclass":
             _handle_getclass(args)
+        elif args.command == "getmanifest":
+            _handle_getmanifest(args)
         else:
             _handle_findrefs(args)
     except Exception as e:
@@ -192,6 +210,7 @@ def _build_main_parser():
   python main.py app.apk --gui
   python main.py getclass app.apk Lcom/poc/Main; -o Main.java
   python main.py getclass app.apk com.poc.Main --threads 16
+  python main.py getmanifest app.apk -o AndroidManifest.xml
   python main.py findrefs app.apk string token -o string_refs.txt
   python main.py findrefs app.apk type com.poc.Main
   python main.py findrefs app.apk method onCreate --class com.poc.Main
@@ -216,6 +235,19 @@ def _build_main_parser():
     getclass_parser.add_argument("-o", "--output", help="Also write decompiled output to this file.")
     getclass_parser.add_argument("apk_path", help="Path to the input APK file.")
     getclass_parser.add_argument("dalvik_class", help="The Dalvik format class name to extract (e.g., Lcom/poc/Main;).")
+
+    getmanifest_parser = subparsers.add_parser(
+        "getmanifest",
+        help="Decode AndroidManifest.xml from APK and print it as XML.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  python main.py getmanifest app.apk
+  python main.py getmanifest app.apk -o AndroidManifest.xml
+""",
+    )
+    getmanifest_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    getmanifest_parser.add_argument("-o", "--output", help="Also write decoded manifest to this file.")
+    getmanifest_parser.add_argument("apk_path", help="Path to the input APK file.")
 
     findrefs_parser = subparsers.add_parser(
         "findrefs",
