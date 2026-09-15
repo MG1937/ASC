@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "droidasc"
+version = "0.1.0"
+description = "ASC is a super FAST python Android Decompiler for Agents/Mobile Researchers"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "androguard>=4.1.3",
+]
+
+[project.scripts]
+droidasc = "droidasc:main"
+
+[tool.setuptools.packages.find]
+include = ["droidasc", "droidasc.*"]
+
+[tool.setuptools.package-data]
+"droidasc" = ["py.typed"]

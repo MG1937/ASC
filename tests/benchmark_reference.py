@@ -17,8 +17,29 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 
 
+def _wrap_workload_test(directory, test_name):
+    """Rewrite old top-level imports (findrefs, utils, core, models) in workload
+    test scripts to droidasc.asc_core.* so they work with the current package structure."""
+    workdir = Path(directory)
+    src = (workdir / test_name).read_text(encoding='utf-8')
+    src = re.sub(
+        r'^from (findrefs|utils|core|models)\.',
+        r'from droidasc.asc_core.\1.',
+        src,
+        flags=re.MULTILINE,
+    )
+    wrapper = workdir / f'_benchmark_{test_name}'
+    wrapper.write_text(
+        f'import sys\n'
+        f'sys.path.insert(0, {str(ROOT)!r})\n'
+        f'{src}',
+        encoding='utf-8',
+    )
+    return wrapper
+
+
 def run_script(script, directory, output, index):
-    env = dict(os.environ, PYTHONPATH=str(ROOT / 'src' / 'asc_core'))
+    env = dict(os.environ, PYTHONPATH='')
     start = time.perf_counter()
     result = subprocess.run([sys.executable, script], cwd=directory, env=env,
                             capture_output=True, text=True, timeout=30)
@@ -52,13 +73,15 @@ def main():
                 if set(source.namelist()) != {'classes.dex', 'test.py', 'test_findrefs.py'}:
                     raise ValueError('Unexpected reference archive members')
                 source.extractall(directory)
+            wrapped_test = _wrap_workload_test(directory, 'test.py')
+            wrapped_findrefs = _wrap_workload_test(directory, 'test_findrefs.py')
             for index in range(args.samples):
-                text, wall_ms = run_script('test.py', directory, args.output, index)
+                text, wall_ms = run_script(str(wrapped_test), directory, args.output, index)
                 match = re.search(r'Total Execution Time in test.py: ([\d.]+) s', text)
                 if match is None or 'class ClockFaceView' not in text:
                     raise ValueError(f'test.py sample {index}: missing source or timing')
                 report['decompile'].append({'seconds': float(match[1]), 'wall_ms': wall_ms})
-                text, wall_ms = run_script('test_findrefs.py', directory, args.output, index)
+                text, wall_ms = run_script(str(wrapped_findrefs), directory, args.output, index)
                 times = {key: float(value) for key, value in
                          re.findall(r'\[DEBUG\] (\w+) Time: ([\d.]+) us', text)}
                 counts = {key: int(value) for key, value in
