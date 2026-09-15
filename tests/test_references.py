@@ -1,3 +1,4 @@
+import re
 import struct
 import sys
 import unittest
@@ -65,6 +66,69 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertTrue(any('->first' in line for line in lines))
         self.assertTrue(any('->second' in line for line in lines))
+
+
+class InsnVerifyPatternTests(unittest.TestCase):
+    """INSN_VERIFY must compile on every Python the project declares support for."""
+
+    def setUp(self):
+        InsnLocator(DEX.parse(memoryview(make_dex()), 'fixture.dex'))
+
+    def test_pattern_compiles_on_the_declared_interpreter(self):
+        # pyproject declares requires-python >=3.10. The atomic group is Python 3.11+
+        # syntax, so on 3.10 re.compile raises "unknown extension ?>" and every
+        # reference search and decompile dies at import time.
+        self.assertIsNotNone(InsnLocator.INSN_VERIFY)
+        self.assertTrue(InsnLocator.INSN_VERIFY.match(b'\x0e\x00'))
+
+    def test_atomic_group_is_only_used_when_the_interpreter_supports_it(self):
+        try:
+            re.compile(b'(?>(?:a|b)*)')
+            supports_atomic = True
+        except re.error:
+            supports_atomic = False
+        self.assertEqual(b'(?>' in InsnLocator.INSN_VERIFY.pattern, supports_atomic)
+
+    def test_fallback_pattern_verifies_identically_without_atomic_groups(self):
+        # The atomic group only stops the greedy star from backtracking; it must not
+        # change which instruction runs verify. Rebuild both forms from the same opcode
+        # table and check they agree, so the 3.10 fallback is provably not a behaviour
+        # change. Skipped where the interpreter cannot compile the atomic form.
+        try:
+            probe = re.compile(b'(?>(?:a|b)*)')
+        except re.error:
+            self.skipTest('interpreter has no atomic groups; fallback is the only form')
+        self.assertIsNotNone(probe)
+
+        from droidasc.asc_core.models import dvm_opcode
+        buckets = {}
+        for opcode in dvm_opcode.opcodes:
+            buckets.setdefault(dvm_opcode.opcodes[opcode].oplen, set()).add(opcode)
+        seen = set()
+        for oplen, opcodes in buckets.items():
+            self.assertFalse(seen.intersection(opcodes),
+                             f'oplen {oplen} shares an opcode with another length')
+            seen.update(opcodes)
+        self.assertEqual(len(seen), len(dvm_opcode.opcodes))
+
+        parts = [b'[' + re.escape(bytes(buckets[oplen])) + b']' + b'.' * (oplen * 2 - 1)
+                 for oplen in sorted(buckets)]
+        body = b'|'.join(parts)
+        plain = re.compile(b'(?:' + body + b')*', re.DOTALL)
+        atomic = re.compile(b'(?>(?:' + body + b')*)', re.DOTALL)
+
+        # 0x0e 0x00 is return-void; 0x3e is not a dalvik opcode, so a range that
+        # contains it must fail to verify as a whole.
+        cases = [(b'\x0e\x00', b'\x0e\x00'),
+                 (b'\x0e\x00\x0e\x00', b'\x0e\x00\x0e\x00'),
+                 (b'\x0e\x00\x3e\x00', None)]
+        for data, expected in cases:
+            with self.subTest(data=data):
+                plain_match = plain.fullmatch(data)
+                atomic_match = atomic.fullmatch(data)
+                self.assertEqual(plain_match.group(0) if plain_match else None,
+                                 atomic_match.group(0) if atomic_match else None)
+                self.assertEqual(plain_match.group(0) if plain_match else None, expected)
 
 
 class StringTests(unittest.TestCase):

@@ -54,7 +54,16 @@ class InsnLocator(BaseLocator):
             insns_re.append(b"[" + re.escape(bytes(insns[oplen])) + b"]" +
                     b"." * (oplen * 2 - 1)) # -1 for exclude opcode itself
         # utilzes c-regex cap for fast matching, rather than performing linear matching in py 
-        InsnLocator.INSN_VERIFY = re.compile(b"(?>(?:" + b"|".join(insns_re) + b")*)", re.DOTALL)
+        body = b"|".join(insns_re)
+        # The atomic group keeps the greedy star from backtracking over the instruction ranges
+        # that fail to verify, which is the common case on a real DEX. It is pure optimisation,
+        # but it is also Python 3.11+ syntax: pyproject declares requires-python >=3.10, where
+        # re.compile raises "unknown extension ?>" and every reference search and decompile dies
+        # at import. Keep it where the interpreter understands it, fall back otherwise.
+        try:
+            InsnLocator.INSN_VERIFY = re.compile(b"(?>(?:" + body + b")*)", re.DOTALL)
+        except re.error:
+            InsnLocator.INSN_VERIFY = re.compile(b"(?:" + body + b")*", re.DOTALL)
 
     def _encoded_method_parse(self, data : bytes, pos, midx):
         if pos == 0:
