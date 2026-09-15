@@ -12,9 +12,19 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 https://github.com/user-attachments/assets/4c4a6813-8561-490c-a573-ef113da861b6
 
-# How to use
+# Install
+```bash
+# from PyPI
+pip install droidasc
+
+# or from source
+pip install .
 ```
-usage: main.py [-h] {getclass,getmanifest,findrefs} ...
+
+After installation, the `droidasc` CLI command is available globally:
+
+```
+usage: droidasc [-h] {getclass,getmanifest,findrefs} ...
 
 ASC tooling entry.
 
@@ -28,13 +38,15 @@ options:
   -h, --help            show this help message and exit
 
 examples:
-  python main.py app.apk --gui
-  python main.py getclass app.apk Lcom/poc/Main; -o Main.java
-  python main.py getclass app.apk com.poc.Main --threads 16
-  python main.py getmanifest app.apk -o AndroidManifest.xml
-  python main.py findrefs app.apk string token -o string_refs.txt
-  python main.py findrefs app.apk type com.poc.Main
-  python main.py findrefs app.apk method onCreate --class com.poc.Main
-  python main.py findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
-  python main.py findrefs app.apk field apiKey -o field_refs.txt
+  droidasc app.apk --gui
+  droidasc getclass app.apk Lcom/poc/Main; -o Main.java
+  droidasc getclass app.apk com.poc.Main --threads 16
+  droidasc getmanifest app.apk -o AndroidManifest.xml
+  droidasc findrefs app.apk string token -o string_refs.txt
+  droidasc findrefs app.apk type com.poc.Main
+  droidasc findrefs app.apk method onCreate --class com.poc.Main
+  droidasc findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
+  droidasc findrefs app.apk field apiKey -o field_refs.txt
 ```
+
+You can also use `python main.py` as before — it delegates to the same entry point.
