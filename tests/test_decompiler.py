@@ -9,9 +9,9 @@ import unittest
 import zipfile
 
 from dex_fixture import make_dex, make_static_field_dex
-from src.asc_core.core.dex.dex_manager import DexManager
-from src.asc_core.utils.dex_parser import parse_encoded_array
-from src.asc_core.utils.tinydex import DEX
+from droidasc.asc_core.core.dex.dex_manager import DexManager
+from droidasc.asc_core.utils.dex_parser import parse_encoded_array
+from droidasc.asc_core.utils.tinydex import DEX
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +46,7 @@ sys.path.insert(0, 'tests')
 from dex_fixture import make_dex
 loaded = []
 sys.addaudithook(lambda event, args: loaded.append(args[0]) if event == 'import' else None)
-from src.asc_client.asc_handler import AscHandler
+from droidasc.asc_client.asc_handler import AscHandler
 for _ in range(2):
     source = AscHandler().getclass(make_dex(), 'Lexample/Test;')
     assert 'class Test' in source
@@ -81,7 +81,7 @@ assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_clie
                     self.assertIn('class Test', source.stdout)
 
     def test_gui_store_can_decompile_twice_and_then_search(self):
-        from src.asc_client.gui.runtime import GuiDexStore
+        from droidasc.asc_client.gui.runtime import GuiDexStore
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / 'fixture.apk'
             with zipfile.ZipFile(apk, 'w') as archive:

@@ -1,22 +1,30 @@
+# Python
 __pycache__/
 *.pyc
-*.swp
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Android artifacts
 *.dex
-testcase.txt
 *.apk
 *.zip
 *.jar
 *.jadx
-*.bak
-temp/*
 
-.venv/
-
+# Test & benchmarking
+testcase.txt
+.pytest_cache/
 artifacts/startup/
-
-!tests/fixtures/reference-workload.zip
 artifacts/reference/
-
-.performance-base/
 artifacts/comparison/
-dist/
+.performance-base/
+
+# Editor & OS
+*.swp
+*.bak
+temp/
+
+# Test fixture exception
+!tests/fixtures/reference-workload.zip

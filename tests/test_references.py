@@ -4,10 +4,10 @@ import unittest
 from unittest.mock import patch
 
 from dex_fixture import make_dex
-from src.asc_client.asc_handler import AscHandler
-from src.asc_core.findrefs.locator.insn_locator import InsnLocator
-from src.asc_core.findrefs.scan.code_item_scan import CodeItemScanner
-from src.asc_core.utils.tinydex import DEX
+from droidasc.asc_client.asc_handler import AscHandler
+from droidasc.asc_core.findrefs.locator.insn_locator import InsnLocator
+from droidasc.asc_core.findrefs.scan.code_item_scan import CodeItemScanner
+from droidasc.asc_core.utils.tinydex import DEX
 
 
 class ReferenceTests(unittest.TestCase):
@@ -69,7 +69,7 @@ class ReferenceTests(unittest.TestCase):
 
 class StringTests(unittest.TestCase):
     def locate(self, data, query):
-        from src.asc_core.findrefs.locator.string_locator import StringLocator
+        from droidasc.asc_core.findrefs.locator.string_locator import StringLocator
         return StringLocator(DEX.parse(memoryview(data), 'fixture.dex')).locate(query)
 
     def test_last_string_is_searchable(self):
@@ -101,7 +101,7 @@ class DependencyTests(unittest.TestCase):
 import sys
 sys.path.insert(0, 'tests')
 from dex_fixture import make_dex
-from src.asc_client.asc_handler import AscHandler
+from droidasc.asc_client.asc_handler import AscHandler
 lines = AscHandler().findrefs('fixture.dex', make_dex(), 'string', {'string': 'token'})
 assert len(lines) == 2, lines
 assert 'androguard' not in sys.modules
