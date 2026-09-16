@@ -36,7 +36,8 @@ class ReleaseTests(unittest.TestCase):
             apk = root / 'fixture.apk'
             with zipfile.ZipFile(apk, 'w', compression=zipfile.ZIP_DEFLATED) as package:
                 package.writestr('classes.dex', make_dex())
-            for args, expected in ((['findrefs', str(apk), 'string', 'token'], 'token'),
+            for args, expected in ((['listclass', str(apk), '--prefix', 'example'], 'Lexample/Test;'),
+                                   (['findrefs', str(apk), 'string', 'token'], 'token'),
                                    (['getclass', str(apk), 'example.Test'], 'class Test')):
                 result = subprocess.run([sys.executable, str(app / 'main.py'), *args],
                                         cwd=root, capture_output=True, text=True, timeout=30)
