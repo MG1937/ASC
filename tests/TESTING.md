@@ -13,6 +13,9 @@ strict mode. It covers index zero, empty/fallback instruction maps, string layou
 zeroed reconstructed DEX signatures/checksums, dummy imports, the MUTF-8 shim,
 CLI stored/Deflate multidex operation, GUI data-store reuse, and reference searches
 without site packages. It does not open GUI windows.
+GUI startup tests cover the `--gui` flag, macOS foreground execution, missing Tk
+diagnostics, debug tracebacks, and relative APK paths in detached launches using
+a stub GUI; native window rendering still requires a Tk-enabled desktop Python.
 
 The synthetic startup gate measures `getclass --debug` in nine fresh interpreters.
 Its median budgets are 100 ms internal time and 250 ms wall time on Linux CI.

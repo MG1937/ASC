@@ -50,3 +50,39 @@ examples:
 ```
 
 You can also use `python main.py` as before — it delegates to the same entry point.
+
+## macOS GUI setup
+
+The GUI uses `tkinter`, including Python's native `_tkinter` module and Tcl/Tk.
+These are interpreter dependencies, not pip packages; installing
+`requirements.txt` does not add Tk to a Python build that lacks it.
+
+Check the **same interpreter** used to run ASC:
+
+```sh
+python -m tkinter
+```
+
+This should open a small test window. If it reports `No module named '_tkinter'`
+or `tkinter`, use a Python installation with Tk support. For example, with
+[Homebrew Python 3.12](https://formulae.brew.sh/formula/python@3.12):
+
+```sh
+brew install python@3.12 python-tk@3.12
+"$(brew --prefix python@3.12)/bin/python3.12" -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m tkinter
+.venv/bin/python -m droidasc test.apk --gui
+```
+
+Alternatively, the [python.org macOS installer](https://www.python.org/download/mac/tcltk/)
+includes Tcl/Tk; create a virtual environment using that installation.
+An existing virtual environment made with pyenv continues to use its original
+Python. Installing Homebrew's Tk package does **not** retrofit that pyenv Python;
+rebuild it with Tcl/Tk support or create a new environment with a Tk-enabled
+interpreter as above.
+
+Use `--gui` to launch the GUI. On macOS, the GUI runs in the foreground;
+the terminal stays attached until the window closes, and startup failures are
+printed with a nonzero exit status. Add `--debug` to include a traceback.
+Missing Tk support is checked before any background launch on other platforms.
