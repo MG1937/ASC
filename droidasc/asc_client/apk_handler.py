@@ -414,6 +414,100 @@ class ApkHandler:
             mm.close()
             fp.close()
 
+    def list_classes(self, prefix : str = None):
+        if self.max_workers <= 0:
+            raise ValueError("Worker count must be greater than zero")
+        if prefix is not None:
+            prefix = prefix.strip()
+            if not prefix:
+                raise ValueError("Class prefix cannot be empty")
+            if not prefix.startswith("L"):
+                prefix = "L" + prefix.replace(".", "/")
+        prefix_bytes = prefix.encode("ascii") if prefix and prefix.isascii() else None
+
+        def list_dex_classes(buf):
+            if len(buf) < 0x70 or buf[:3] != b"dex":
+                raise ValueError("invalid DEX header")
+
+            string_ids_size = _U32_FROM(buf, 0x38)[0]
+            string_ids_off = _U32_FROM(buf, 0x3C)[0]
+            type_ids_size = _U32_FROM(buf, 0x40)[0]
+            type_ids_off = _U32_FROM(buf, 0x44)[0]
+            class_defs_size = _U32_FROM(buf, 0x60)[0]
+            class_defs_off = _U32_FROM(buf, 0x64)[0]
+
+            if class_defs_size == 0:
+                return []
+            if string_ids_off + string_ids_size * 4 > len(buf):
+                raise ValueError("bad string_ids range")
+            if type_ids_off + type_ids_size * 4 > len(buf):
+                raise ValueError("bad type_ids range")
+            if class_defs_off + class_defs_size * 32 > len(buf):
+                raise ValueError("bad class_defs range")
+
+            names = []
+            append = names.append
+            for class_def_off in range(class_defs_off, class_defs_off + class_defs_size * 32, 32):
+                type_idx = _U32_FROM(buf, class_def_off)[0]
+                if type_idx >= type_ids_size:
+                    raise ValueError("bad class_def->type_idx")
+                string_idx = _U32_FROM(buf, type_ids_off + (type_idx << 2))[0]
+                if string_idx >= string_ids_size:
+                    raise ValueError("bad type_id->string_idx")
+                string_off = _U32_FROM(buf, string_ids_off + (string_idx << 2))[0]
+                if string_off >= len(buf):
+                    raise ValueError("bad string_data_off")
+                try:
+                    raw_name = _read_string_data_bytes(buf, string_off)
+                except IndexError as error:
+                    raise ValueError("bad string_data_off") from error
+
+                if prefix_bytes is not None:
+                    if raw_name.startswith(prefix_bytes):
+                        append(raw_name.decode("utf-8", errors="replace"))
+                else:
+                    name = raw_name.decode("utf-8", errors="replace")
+                    if prefix is None or name.startswith(prefix):
+                        append(name)
+            return names
+
+        t_start = time.perf_counter()
+        fp, mm = self._open_apk()
+        try:
+            entries = _parse_cd_dex_entries(mm)
+            if not entries:
+                return []
+
+            def list_entry(entry):
+                data = _inflate_dex(mm, entry)
+                names = []
+                for dex_name, dex_buf in iter_logical_dex_buffers(entry[0], data):
+                    names.extend(list_dex_classes(dex_buf))
+                return entry[0], names
+
+            workers = min(len(entries), self.max_workers)
+            if workers == 1:
+                results = [list_entry(entry) for entry in entries]
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    results = list(ex.map(list_entry, entries))
+
+            names = []
+            for dex_name, dex_names in results:
+                names.extend(dex_names)
+                self._log(f"[APK] '{dex_name}' class_count={len(dex_names)}")
+
+            if self.debug:
+                t_end = time.perf_counter()
+                self._log(
+                    f"[APK] listclass total={(t_end - t_start) * 1000000:.2f} us "
+                    f"count={len(names)} workers={workers}"
+                )
+            return names
+        finally:
+            mm.close()
+            fp.close()
+
     def for_each_findrefs(self, find_type : str, find : dict):
         # imported before the timer so this once-per-process import is not charged to a
         # single search; it used to happen at apk_handler import time, and keeping the

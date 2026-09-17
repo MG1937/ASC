@@ -84,6 +84,32 @@ def _handle_getclass(args):
     print(source_code)
 
 
+def _handle_listclass(args):
+    from droidasc.asc_client.apk_handler import ApkHandler
+
+    names = ApkHandler(args.apk_path, debug=args.debug, max_workers=args.threads).list_classes(
+        args.prefix
+    )
+
+    output_fp = (
+        open(args.output, "w", encoding="utf-8", errors="replace", newline="\n")
+        if args.output
+        else None
+    )
+    out = output_fp if output_fp is not None else sys.stdout
+    try:
+        for start in range(0, len(names), 8192):
+            text = "\n".join(names[start:start + 8192]) + "\n"
+            out.write(text)
+    finally:
+        if output_fp is not None:
+            output_fp.close()
+
+    if args.debug:
+        t_end = time.perf_counter()
+        print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us")
+
+
 def _handle_getmanifest(args):
     from droidasc.asc_client.manifest_handler import get_manifest_xml
 
@@ -222,9 +248,11 @@ def main():
     try:
         if args.command == "getclass":
             _handle_getclass(args)
+        elif args.command == "listclass":
+            _handle_listclass(args)
         elif args.command == "getmanifest":
             _handle_getmanifest(args)
-        else:
+        elif args.command == "findrefs":
             _handle_findrefs(args)
     except Exception as e:
         _exit_with_error(e, args.debug)
@@ -238,6 +266,8 @@ def _build_main_parser():
   droidasc app.apk --gui
   droidasc getclass app.apk Lcom/poc/Main; -o Main.java
   droidasc getclass app.apk com.poc.Main --threads 16
+  droidasc listclass app.apk -o classes.txt
+  droidasc listclass app.apk --prefix com.poc
   droidasc getmanifest app.apk -o AndroidManifest.xml
   droidasc findrefs app.apk string token -o string_refs.txt
   droidasc findrefs app.apk type com.poc.Main
@@ -263,6 +293,26 @@ def _build_main_parser():
     getclass_parser.add_argument("-o", "--output", help="Also write decompiled output to this file.")
     getclass_parser.add_argument("apk_path", help="Path to the input APK file.")
     getclass_parser.add_argument("dalvik_class", help="The Dalvik format class name to extract (e.g., Lcom/poc/Main;).")
+
+    listclass_parser = subparsers.add_parser(
+        "listclass",
+        help="List classes across all DEX entries; use --prefix to filter by package/class prefix.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  droidasc listclass app.apk
+  droidasc listclass app.apk --prefix com.poc
+  droidasc listclass app.apk -o classes.txt
+  droidasc listclass app.apk --threads 16 --debug
+""",
+    )
+    listclass_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    listclass_parser.add_argument("--threads", "--thread", type=int, default=8, help="Worker thread count.")
+    listclass_parser.add_argument(
+        "--prefix",
+        help="Only list classes with this package/class prefix (e.g., com.poc or Lcom/poc).",
+    )
+    listclass_parser.add_argument("-o", "--output", help="Write class names to this file instead of stdout.")
+    listclass_parser.add_argument("apk_path", help="Path to the input APK file.")
 
     getmanifest_parser = subparsers.add_parser(
         "getmanifest",

@@ -24,13 +24,14 @@ pip install .
 After installation, the `droidasc` CLI command is available globally:
 
 ```
-usage: droidasc [-h] {getclass,getmanifest,findrefs} ...
+usage: droidasc [-h] {getclass,listclass,getmanifest,findrefs} ...
 
 ASC tooling entry.
 
 positional arguments:
-  {getclass,getmanifest,findrefs}
+  {getclass,listclass,getmanifest,findrefs}
     getclass            Locate the target class in APK, extract one DEX in memory, then decompile.
+    listclass           List classes defined across all DEX entries in APK.
     getmanifest         Decode AndroidManifest.xml from APK and print it as XML.
     findrefs            Find code references for string/type/method/field across all DEX entries in APK.
 
@@ -41,6 +42,8 @@ examples:
   droidasc app.apk --gui
   droidasc getclass app.apk Lcom/poc/Main; -o Main.java
   droidasc getclass app.apk com.poc.Main --threads 16
+  droidasc listclass app.apk -o classes.txt
+  droidasc listclass app.apk --prefix com.poc
   droidasc getmanifest app.apk -o AndroidManifest.xml
   droidasc findrefs app.apk string token -o string_refs.txt
   droidasc findrefs app.apk type com.poc.Main
@@ -48,6 +51,11 @@ examples:
   droidasc findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
   droidasc findrefs app.apk field apiKey -o field_refs.txt
 ```
+
+`listclass` prints Dalvik class descriptors in APK/DEX definition order, one per
+line. With `-o`, output is written to the selected file instead of stdout.
+`--prefix com.poc` filters by `Lcom/poc`; an already normalized prefix such as
+`Lcom/poc` is kept unchanged.
 
 You can also use `python main.py` as before — it delegates to the same entry point.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "droidasc"
-version = "0.1.0"
+version = "0.1.1.post1"
 description = "ASC is a super FAST python Android Decompiler for Agents/Mobile Researchers"
 readme = "README.md"
 license = "Apache-2.0"
