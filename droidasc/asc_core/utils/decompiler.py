@@ -95,6 +95,7 @@ def monkey_header_init(self, offset, buff, cm):
 androguard_dex.HeaderItem.__init__ = monkey_header_init
 
 from androguard.decompiler import decompile
+from androguard.decompiler import instruction as androguard_instruction
 from androguard.decompiler import util as androguard_util
 from androguard.core.analysis.analysis import MethodAnalysis
 import androguard.core.androconf as androconf
@@ -225,6 +226,66 @@ def patched_dvmethod_get_source(self) -> str:
     return "".join("\n    %s" % annotation for annotation in annotations) + source
 
 decompile.DvMethod.get_source = patched_dvmethod_get_source
+_orig_dvmethod_get_source_ext = decompile.DvMethod.get_source_ext
+def patched_dvmethod_get_source_ext(self) -> list[tuple]:
+    source = _orig_dvmethod_get_source_ext(self)
+    annotations = getattr(self, "_asc_annotations", None)
+    if not annotations:
+        return source
+    prefix = "".join("\n    %s" % annotation for annotation in annotations)
+    return [("ASC_ANNOTATIONS", prefix)] + source
+
+decompile.DvMethod.get_source_ext = patched_dvmethod_get_source_ext
+
+# Preserve the declaring field on source tokens. Androguard's default Writer
+# keeps the field name for instance accesses and only a combined text token for
+# static accesses, but drops the field IR object containing clsdesc.
+def patched_instance_expression_visit(self, visitor):
+    return visitor.visit_get_instance(
+        self.var_map[self.arg], self.name, data=self
+    )
+
+
+def patched_instance_instruction_visit(self, visitor):
+    v_m = self.var_map
+    return visitor.visit_put_instance(
+        v_m[self.lhs], self.name, v_m[self.rhs], data=self
+    )
+
+
+def patched_writer_get_static(self, cls, name, data=None):
+    value = f"{cls}.{name}"
+    self.write(value)
+    self.write_ext(("GET_STATIC", value, data))
+
+
+def patched_static_expression_visit(self, visitor):
+    return visitor.visit_get_static(self.cls, self.name, data=self)
+
+
+def patched_writer_put_static(self, cls, name, rhs, data=None):
+    self.write_ind()
+    value = f"{cls}.{name}"
+    self.write(value)
+    self.write_ext(("PUT_STATIC", value, data))
+    self.write(" = ")
+    self.write_ext(("FIELD_ASSIGN", " = "))
+    rhs.visit(self)
+    self.end_ins()
+
+
+def patched_static_instruction_visit(self, visitor):
+    return visitor.visit_put_static(
+        self.cls, self.name, self.var_map[self.rhs], data=self
+    )
+
+
+androguard_instruction.InstanceExpression.visit = patched_instance_expression_visit
+androguard_instruction.InstanceInstruction.visit = patched_instance_instruction_visit
+androguard_instruction.StaticExpression.visit = patched_static_expression_visit
+androguard_instruction.StaticInstruction.visit = patched_static_instruction_visit
+decompile.Writer.visit_get_static = patched_writer_get_static
+decompile.Writer.visit_put_static = patched_writer_put_static
 # --- End of String/Type Optimizations ---
 
 # We also completely disable ALL androguard loggers via python's standard logging module
@@ -265,7 +326,7 @@ class FakeAnalysis:
             self.methods[method] = ma
         return self.methods[method]
 
-def decompile_dex_bytes(dex_bytes: bytearray, dalvik_class_fmt: str):
+def _decompile_class(dex_bytes: bytearray, dalvik_class_fmt: str):
     """
     Take DEX bytes and a target class format, decompile it using Androguard DAD
     and return the source code.
@@ -277,9 +338,104 @@ def decompile_dex_bytes(dex_bytes: bytearray, dalvik_class_fmt: str):
     
     target_class = d.get_class(dalvik_class_fmt)
     if not target_class:
-        return f"Error: Class {dalvik_class_fmt} not found in the reconstructed DEX."
+        return None
         
     c = decompile.DvClass(target_class, dx)
     c.process()
+    return c
+
+
+def _dalvik_class_name(name : str) -> str:
+    name = (name or "").replace(".", "/")
+    if not name.startswith("L"):
+        name = "L" + name
+    if not name.endswith(";"):
+        name += ";"
+    return name
+
+
+# reuse androguard daddecompiler's token type, we can extract source' semantics, enhance gui xref ability
+# 20260921 we may extract daddecompiler from androguard in future, for better development
+def _source_with_member_references(source_ext):
+    parts = []
+    references = []
+    offset = 0
+
+    def append_tokens(tokens):
+        nonlocal offset
+        for token in tokens:
+            if len(token) < 2:
+                continue
+            kind, value = token[0], token[1]
+            if isinstance(value, list):
+                append_tokens(value)
+                continue
+            value = str(value)
+            start = offset
+            parts.append(value)
+            offset += len(value)
+
+            if kind == "NAME_METHOD_PROTOTYPE" and len(token) >= 3:
+                method = token[2]
+                references.append((
+                    start, offset, "method",
+                    _dalvik_class_name(method.cls_name),
+                    method.name,
+                    method.triple[2],
+                    True,
+                ))
+            elif kind == "NAME_METHOD_INVOKE" and len(token) >= 7:
+                invoke = token[6]
+                references.append((
+                    start, offset, "method",
+                    _dalvik_class_name(invoke.triple[0]),
+                    invoke.name,
+                    invoke.triple[2],
+                    False,
+                ))
+            elif kind == "NAME_FIELD" and len(token) >= 4:
+                field = token[3]
+                references.append((
+                    start, offset, "field",
+                    field.get_class_name(),
+                    field.get_name(),
+                    field.get_descriptor(),
+                    True,
+                ))
+            elif kind in ("NAME_CLASS_INSTANCE", "NAME_CLASS_ASSIGNMENT") and len(token) >= 3:
+                field = token[2]
+                references.append((
+                    start, offset, "field",
+                    _dalvik_class_name(field.clsdesc),
+                    field.name,
+                    getattr(field, "ftype", getattr(field, "atype", "")),
+                    False,
+                ))
+            elif kind in ("GET_STATIC", "PUT_STATIC") and len(token) >= 3:
+                field = token[2]
+                field_start = offset - len(field.name)
+                references.append((
+                    field_start, offset, "field",
+                    _dalvik_class_name(field.clsdesc),
+                    field.name,
+                    field.ftype,
+                    False,
+                ))
+
+    append_tokens(source_ext)
+    return "".join(parts), references
+
+
+def decompile_dex_bytes(dex_bytes: bytearray, dalvik_class_fmt: str):
+    c = _decompile_class(dex_bytes, dalvik_class_fmt)
+    if c is None:
+        return f"Error: Class {dalvik_class_fmt} not found in the reconstructed DEX."
     # Remove the Decompile only time debug output
     return c.get_source()
+
+
+def decompile_dex_bytes_with_metadata(dex_bytes: bytearray, dalvik_class_fmt: str):
+    c = _decompile_class(dex_bytes, dalvik_class_fmt)
+    if c is None:
+        return f"Error: Class {dalvik_class_fmt} not found in the reconstructed DEX.", []
+    return _source_with_member_references(c.get_source_ext())

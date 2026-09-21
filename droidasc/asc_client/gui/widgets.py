@@ -20,6 +20,8 @@ class EditorTab:
     xview : tuple = (0.0, 1.0)
     insert_index : str = "1.0"
     comments : dict = field(default_factory=dict)
+    member_references : list = field(default_factory=list)
+    rendered_member_references : list = field(default_factory=list)
 
 
 class EditorTabBar(ttk.Frame):

@@ -70,11 +70,12 @@ class FieldLocator(BaseLocator):
                 ret.update(fids)
         return ret
 
-    def _match_clz_fids(self, clz_fids : set, field : str) -> set:
+    def _match_clz_fids(self, clz_fids : set, field : str, precise : bool = False) -> set:
         ret = set()
         fields = self.dex.fields
         for fid in clz_fids:
-            if fields[fid].name.find(field) != -1:
+            matches = fields[fid].name == field if precise else field in fields[fid].name
+            if matches:
                 ret.add(fid)
         return ret
 
@@ -91,6 +92,9 @@ class FieldLocator(BaseLocator):
 
         clz = find.get("class")
         field = find.get("field")
+        field_precise = False
+        if isinstance(field, (list, tuple)):
+            field, field_precise = field
         clz_precise = True
         if clz is not None:
             clz, clz_precise = clz
@@ -103,6 +107,8 @@ class FieldLocator(BaseLocator):
             return set()
 
         if clz is None:
+            if field_precise:
+                return {fid for fid, item in enumerate(self.dex.fields) if item.name == field}
             name_idxs = self.str_locator.locate(field)
             field_maps = self.field_maps
             ret = set()
@@ -133,10 +139,12 @@ class FieldLocator(BaseLocator):
             self._debug_log("locate", t_start, len(clz_fids))
             return clz_fids
         if clz_precise:
-            ret = self._match_clz_fids(clz_fids, field)
+            ret = self._match_clz_fids(clz_fids, field, field_precise)
             self._debug_log("locate", t_start, len(ret))
             return ret
 
+        if field_precise:
+            return self._match_clz_fids(clz_fids, field, True)
         name_idxs = self.str_locator.locate(field)
         ret = set()
         for name_idx in name_idxs:

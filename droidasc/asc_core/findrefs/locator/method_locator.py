@@ -69,11 +69,12 @@ class MethodLocator(BaseLocator):
                 ret.update(mids)
         return ret
 
-    def _match_clz_mids(self, clz_mids : set, method : str) -> set:
+    def _match_clz_mids(self, clz_mids : set, method : str, precise : bool = False) -> set:
         ret = set()
         methods = self.dex.methods
         for mid in clz_mids:
-            if methods[mid].name.find(method) != -1:
+            matches = methods[mid].name == method if precise else method in methods[mid].name
+            if matches:
                 ret.add(mid)
         return ret
 
@@ -90,6 +91,9 @@ class MethodLocator(BaseLocator):
 
         clz = find.get("class")
         method = find.get("method")
+        method_precise = False
+        if isinstance(method, (list, tuple)):
+            method, method_precise = method
         clz_precise = True
         if clz is not None:
             clz, clz_precise = clz
@@ -102,6 +106,8 @@ class MethodLocator(BaseLocator):
             return set()
 
         if clz is None:
+            if method_precise:
+                return {mid for mid, item in enumerate(self.dex.methods) if item.name == method}
             name_idxs = self.str_locator.locate(method)
             method_maps = self.method_maps
             ret = set()
@@ -132,10 +138,12 @@ class MethodLocator(BaseLocator):
             self._debug_log("locate", t_start, len(clz_mids))
             return clz_mids
         if clz_precise:
-            ret = self._match_clz_mids(clz_mids, method)
+            ret = self._match_clz_mids(clz_mids, method, method_precise)
             self._debug_log("locate", t_start, len(ret))
             return ret
 
+        if method_precise:
+            return self._match_clz_mids(clz_mids, method, True)
         name_idxs = self.str_locator.locate(method)
         ret = set()
         for name_idx in name_idxs:

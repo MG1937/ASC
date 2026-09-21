@@ -9,6 +9,7 @@ from collections import defaultdict
 _DexManager = None
 _FindRefManager = None
 _decompile_dex_bytes = None
+_decompile_dex_bytes_with_metadata = None
 _DEX = None
 
 
@@ -36,7 +37,7 @@ def _install_pure_python_mutf8_shim():
 
 
 def _lazy_import():
-    global _DexManager, _FindRefManager, _decompile_dex_bytes, _DEX
+    global _DexManager, _FindRefManager, _decompile_dex_bytes, _decompile_dex_bytes_with_metadata, _DEX
     if _DexManager is not None:
         return
 
@@ -44,11 +45,12 @@ def _lazy_import():
     from droidasc.asc_core.core.dex.dex_manager import DexManager
     from droidasc.asc_core.findrefs.findrefs_manager import FindRefManager
     from droidasc.asc_core.utils.tinydex import DEX
-    from droidasc.asc_core.utils.decompiler import decompile_dex_bytes
+    from droidasc.asc_core.utils.decompiler import decompile_dex_bytes, decompile_dex_bytes_with_metadata
 
     _DexManager = DexManager
     _FindRefManager = FindRefManager
     _decompile_dex_bytes = decompile_dex_bytes
+    _decompile_dex_bytes_with_metadata = decompile_dex_bytes_with_metadata
     _DEX = DEX
 
 
@@ -61,6 +63,12 @@ class AscHandler:
         manager = _DexManager(memoryview(dex_buf), debug=self.debug)
         new_dex_bytes = manager.extract_and_rebuild(dalvik_class)
         return _decompile_dex_bytes(new_dex_bytes, dalvik_class)
+
+    def getclass_with_metadata(self, dex_buf : bytes, dalvik_class : str):
+        _lazy_import()
+        manager = _DexManager(memoryview(dex_buf), debug=self.debug)
+        new_dex_bytes = manager.extract_and_rebuild(dalvik_class)
+        return _decompile_dex_bytes_with_metadata(new_dex_bytes, dalvik_class)
 
     def _format_method(self, dex, midx : int) -> str:
         method = dex.methods[midx]
