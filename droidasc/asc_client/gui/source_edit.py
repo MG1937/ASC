@@ -245,6 +245,49 @@ def rename_identifier_in_range(text : str, start : int, end : int, old : str, ne
     return text[:start] + "".join(out) + text[end:], len(spans)
 
 
+def remap_ranges_after_replacements(ranges, spans, replacement_length : int):
+    def remap(point):
+        shift = 0
+        for start, end in spans:
+            if point < end:
+                break
+            shift += replacement_length - (end - start)
+        return point + shift
+
+    return [
+        (remap(item[0]), remap(item[1]), *item[2:])
+        for item in ranges
+    ]
+
+
+def member_reference_at_offset(references, offset : int):
+    return next(
+        (item for item in references if item[0] <= offset < item[1]),
+        None,
+    )
+
+
+def find_member_declaration(references, member_type : str, member_name : str, descriptor : str):
+    declarations = [
+        item for item in references
+        if item[2] == member_type and item[4] == member_name and item[6]
+    ]
+    exact = next((item for item in declarations if item[5] == descriptor), None)
+    if exact is not None:
+        return exact
+    if not descriptor and declarations:
+        return declarations[0]
+    return None
+
+
+def linkable_member_spans(references, available_classes):
+    return [
+        (item[0], item[1])
+        for item in references
+        if item[3] in available_classes
+    ]
+
+
 def identifier_occurrences_in_range(text : str, start : int, end : int, name : str):
     spans = []
     state = "code"

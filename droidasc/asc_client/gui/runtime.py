@@ -81,7 +81,10 @@ def _normalize_class_query(name : str, fuzzy : bool):
     return format_class_name(name)
 
 
-def build_find_query(find_type : str, value : str, class_name = None, fuzzy_class : bool = False):
+def build_find_query(
+    find_type : str, value : str, class_name = None, fuzzy_class : bool = False,
+    exact_member : bool = False,
+):
     find_type = _REF_SEARCH_TYPES.get(find_type, find_type)
     if find_type == "string":
         return "string", {"string": value}
@@ -92,9 +95,10 @@ def build_find_query(find_type : str, value : str, class_name = None, fuzzy_clas
     if class_name is None and not value:
         raise ValueError(f"{find_type} query needs at least one of class or {find_type} name")
 
+    member = [value, True] if exact_member and value else value or None
     if class_name is None:
-        return find_type, {find_type: {"class": None, find_type: value or None}}
-    return find_type, {find_type: {"class": [class_name, not fuzzy_class], find_type: value or None}}
+        return find_type, {find_type: {"class": None, find_type: member}}
+    return find_type, {find_type: {"class": [class_name, not fuzzy_class], find_type: member}}
 
 
 def parse_result_line(line : str):
@@ -238,6 +242,10 @@ class GuiDexStore:
         return ret
 
     def get_source(self, dalvik_class : str):
+        dex_name, source, _references = self.get_source_with_metadata(dalvik_class)
+        return dex_name, source
+
+    def get_source_with_metadata(self, dalvik_class : str):
         with self._source_lock:
             old = self.source_cache.get(dalvik_class)
             if old is not None:
@@ -259,10 +267,10 @@ class GuiDexStore:
         with _GUI_MP_LOCK:
             snapshot = _snapshot_sys_modules()
             try:
-                source = AscHandler(self.debug).getclass(dex_buf, dalvik_class)
+                source, references = AscHandler(self.debug).getclass_with_metadata(dex_buf, dalvik_class)
             finally:
                 _restore_sys_modules(snapshot)
-        ret = (dex_name, source)
+        ret = (dex_name, source, references)
         with self._source_lock:
             self.source_cache[dalvik_class] = ret
         _debug_log(
@@ -505,11 +513,12 @@ class GuiDexStore:
         value : str,
         class_name = None,
         fuzzy_class : bool = False,
+        exact_member : bool = False,
         max_workers = None,
         progress_callback = None,
         result_callback = None,
     ):
-        find_type, find = build_find_query(find_type, value, class_name, fuzzy_class)
+        find_type, find = build_find_query(find_type, value, class_name, fuzzy_class, exact_member)
         workers = self.get_effective_search_workers(max_workers)
         _debug_log(
             self.debug,

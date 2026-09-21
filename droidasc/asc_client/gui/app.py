@@ -13,10 +13,14 @@ from droidasc.asc_client.gui.source_edit import (
     identifier_occurrences_in_range,
     index_to_offset,
     is_identifier,
+    find_member_declaration,
+    linkable_member_spans,
+    member_reference_at_offset,
+    remap_ranges_after_replacements,
     rename_identifier_in_range,
     token_at_offset,
 )
-from droidasc.asc_client.gui.text_utils import decode_java_unicode_escapes
+from droidasc.asc_client.gui.text_utils import decode_java_unicode_escapes_with_ranges
 from droidasc.asc_client.gui.theme import ThemeManager
 from droidasc.asc_client.gui.widgets import EditorTab, EditorTabBar
 from droidasc.asc_client.manifest_handler import get_manifest_xml
@@ -242,6 +246,8 @@ class AscGuiApp:
         self._highlight_generation = 0
         self._highlight_apply_batch = 400
         self._highlight_apply_job = None
+        self._ctrl_member_links_visible = False
+        self._pending_member_navigation = None
 
         self._build_ui()
         self._bind_editor_shortcuts()
@@ -301,6 +307,7 @@ class AscGuiApp:
         self.source_text.tag_configure("symbol_current", background=t["symbol_current"])
         self.source_text.tag_configure("find_match", background=t["find_match"], foreground=t["editor_fg"])
         self.source_text.tag_configure("find_current", background=t["find_current"], foreground=t["editor_fg"])
+        self.source_text.tag_configure("member_link", foreground=t["accent"], underline=True)
 
     def apply_theme(self):
         self.theme = self.theme_manager.theme
@@ -450,6 +457,11 @@ class AscGuiApp:
         self.root.bind("<Control-Tab>", self._next_tab)
         self.root.bind("<Control-Shift-Tab>", self._prev_tab)
         self.source_text.bind("<Button-1>", self._set_editor_cursor_from_click)
+        self.source_text.bind("<Control-Button-1>", self._open_member_from_click)
+        self.root.bind("<KeyPress-Control_L>", self._show_member_links)
+        self.root.bind("<KeyPress-Control_R>", self._show_member_links)
+        self.root.bind("<KeyRelease-Control_L>", self._hide_member_links)
+        self.root.bind("<KeyRelease-Control_R>", self._hide_member_links)
         self.source_text.bind("<KeyPress>", self._on_source_key_press)
         self.source_text.bind("<KeyRelease>", self._on_source_key_release)
         self.source_text.bind("<<Paste>>", lambda _event: "break")
@@ -494,8 +506,8 @@ class AscGuiApp:
             self.status_var.set(event[1])
             return
         if kind == "source_done":
-            _kind, dalvik_class, dex_name, source = event
-            self._finish_open_tab(dalvik_class, dex_name, source)
+            _kind, dalvik_class, dex_name, source, member_references = event
+            self._finish_open_tab(dalvik_class, dex_name, source, member_references)
             return
         if kind == "text_tab_done":
             _kind, tab_id, title, source, dex_name = event
@@ -688,11 +700,14 @@ class AscGuiApp:
     def _render_tab_source(self, tab : EditorTab):
         source = tab.edited_source or tab.source
         if not tab.comments:
+            tab.rendered_member_references = list(tab.member_references)
             return source, []
 
         out = []
         comment_spans = []
+        insertions = []
         offset = 0
+        source_offset = 0
         lines = source.splitlines(keepends=True)
         for line_no, line in enumerate(lines, 1):
             newline = ""
@@ -710,12 +725,14 @@ class AscGuiApp:
             else:
                 pad = _COMMENT_GAP
                 comment_text = f"{pad}// {comment}"
+                insertions.append((source_offset + len(body), len(comment_text)))
                 start = offset + len(body) + len(pad)
                 end = start + len(comment_text) - len(pad)
                 rendered = f"{body}{comment_text}{newline}"
                 comment_spans.append((start, end))
             out.append(rendered)
             offset += len(rendered)
+            source_offset += len(line)
 
         if not lines and tab.comments:
             comment = tab.comments.get(1, "")
@@ -723,6 +740,16 @@ class AscGuiApp:
             comment_spans.append((0, len(rendered)))
             return rendered, comment_spans
 
+        def shift_start(point):
+            return point + sum(length for position, length in insertions if position <= point)
+
+        def shift_end(point):
+            return point + sum(length for position, length in insertions if position < point)
+
+        tab.rendered_member_references = [
+            (shift_start(item[0]), shift_end(item[1]), *item[2:])
+            for item in tab.member_references
+        ]
         return "".join(out), comment_spans
 
     def _comment_line_from_index(self, index : str):
@@ -752,9 +779,90 @@ class AscGuiApp:
         except tk.TclError:
             pass
 
+    def _show_member_links(self, _event = None):
+        if self._ctrl_member_links_visible:
+            return None
+        self._ctrl_member_links_visible = True
+        self.source_text.tag_remove("member_link", "1.0", tk.END)
+        tab = self._active_tab()
+        if tab is not None and tab.kind == "class" and not tab.loading and not tab.error:
+            self._tag_ranges(
+                "member_link",
+                linkable_member_spans(
+                    tab.rendered_member_references,
+                    self.store.class_to_dex if self.store is not None else (),
+                ),
+            )
+            self.source_text.tag_raise("member_link")
+        return None
+
+    def _hide_member_links(self, _event = None):
+        self._ctrl_member_links_visible = False
+        self.source_text.tag_remove("member_link", "1.0", tk.END)
+        return None
+
+    def _member_at_index(self, index : str):
+        tab = self._active_tab()
+        if tab is None or tab.kind != "class" or tab.loading or tab.error:
+            return None
+        rendered = tab.edited_source or tab.source
+        references = tab.rendered_member_references or tab.member_references
+        if tab.comments:
+            rendered, _comment_spans = self._render_tab_source(tab)
+            references = tab.rendered_member_references
+        offset = index_to_offset(rendered, index)
+        return member_reference_at_offset(references, offset)
+
+    def _open_member_from_click(self, event):
+        try:
+            index = self.source_text.index(f"@{event.x},{event.y}")
+        except tk.TclError:
+            return "break"
+        reference = self._member_at_index(index)
+        if reference is None:
+            return "break"
+        _start, _end, member_type, class_name, member_name, descriptor, _declaration = reference
+        if self.store is None or class_name not in self.store.class_to_dex:
+            self.status_var.set(f"Declaration class is not present in this APK: {dalvik_to_dot(class_name)}")
+            return "break"
+        self._pending_member_navigation = (class_name, member_type, member_name, descriptor)
+        self.open_class(class_name)
+        self._complete_pending_member_navigation(class_name)
+        return "break"
+
+    def _complete_pending_member_navigation(self, dalvik_class : str):
+        target = self._pending_member_navigation
+        if target is None or target[0] != dalvik_class:
+            return
+        idx = self._find_tab_index(dalvik_class)
+        if idx is None:
+            return
+        tab = self.editor_tabs[idx]
+        if tab.loading or tab.error or not tab.source:
+            return
+        _class_name, member_type, member_name, descriptor = target
+        reference = find_member_declaration(
+            tab.rendered_member_references, member_type, member_name, descriptor
+        )
+        self._pending_member_navigation = None
+        if reference is None:
+            self.status_var.set(f"Declaration not found: {dalvik_to_dot(dalvik_class)}->{member_name}")
+            return
+        start = reference[0]
+        index = f"1.0+{start}c"
+        self.source_text.mark_set("insert", index)
+        self.source_text.see(index)
+        tab.insert_index = self.source_text.index("insert")
+        tab.yview = self.source_text.yview()
+        self._highlight_active_line()
+        self._highlight_related_identifier(tab.insert_index)
+        self.status_var.set(f"Opened declaration {dalvik_to_dot(dalvik_class)}->{member_name}")
+
     def _on_source_key_press(self, event):
         if event.state & 0x0004:
             return None
+        if event.keysym in ("x", "X"):
+            return self._find_current_member_references()
         if event.keysym == "n":
             return self._show_rename_dialog()
         if event.char == ";":
@@ -769,6 +877,29 @@ class AscGuiApp:
             self._highlight_related_identifier(self.source_text.index("insert"))
         return None
 
+    def _find_current_member_references(self, _event = None):
+        tab = self._active_tab()
+        if tab is None or tab.kind != "class" or tab.loading or tab.error or not tab.source:
+            return "break"
+
+        try:
+            cursor_index = self.source_text.index("insert")
+        except tk.TclError:
+            return "break"
+        reference = self._member_at_index(cursor_index)
+        if reference is None:
+            self.status_var.set("Place the cursor on a method or field name to find its references")
+            return "break"
+        _start, _end, member_type, class_name, member_name, *_metadata = reference
+
+        self.search_type_var.set(f"{member_type} refs")
+        self.search_value_var.set(member_name)
+        self.search_class_var.set(class_name)
+        self.fuzzy_class_var.set(False)
+        self._on_search_type_changed()
+        self._start_search(exact_member=True)
+        return "break"
+
     def _highlight_related_identifier(self, index : str):
         self.source_text.tag_remove("symbol_match", "1.0", tk.END)
         self.source_text.tag_remove("symbol_current", "1.0", tk.END)
@@ -776,6 +907,8 @@ class AscGuiApp:
         if tab is None or tab.kind != "class" or tab.loading or tab.error:
             return
         source = tab.edited_source or tab.source
+        if tab.comments:
+            source, _comment_spans = self._render_tab_source(tab)
         if not source:
             return
         offset = index_to_offset(source, index)
@@ -810,6 +943,7 @@ class AscGuiApp:
         self.source_text.tag_remove("symbol_current", "1.0", tk.END)
         self.source_text.tag_remove("find_match", "1.0", tk.END)
         self.source_text.tag_remove("find_current", "1.0", tk.END)
+        self.source_text.tag_remove("member_link", "1.0", tk.END)
         self._set_source_text("Open a class from the package tree or search results.", reset_view=True)
         self.editor_find_status_var.set("")
 
@@ -822,6 +956,7 @@ class AscGuiApp:
         self.source_text.tag_remove("symbol_current", "1.0", tk.END)
         self.source_text.tag_remove("find_match", "1.0", tk.END)
         self.source_text.tag_remove("find_current", "1.0", tk.END)
+        self.source_text.tag_remove("member_link", "1.0", tk.END)
         if tab.loading:
             self._set_source_text(f"Decompiling {dalvik_to_dot(tab.dalvik_class)}...", reset_view=True)
             return
@@ -845,6 +980,9 @@ class AscGuiApp:
             self._highlight_quoted_strings(rendered)
         self._refresh_editor_find_marks(reset_cursor=False)
         self._highlight_active_line()
+        if self._ctrl_member_links_visible:
+            self._ctrl_member_links_visible = False
+            self._show_member_links()
 
     def activate_tab(self, index : int):
         if index < 0 or index >= len(self.editor_tabs):
@@ -852,6 +990,7 @@ class AscGuiApp:
         if index == self.active_tab_idx:
             self.editor_tab_bar.ensure_visible(index)
             self.editor_tab_bar.redraw()
+            self._complete_pending_member_navigation(self.editor_tabs[index].dalvik_class)
             return
         self._remember_active_view()
         self.active_tab_idx = index
@@ -870,13 +1009,20 @@ class AscGuiApp:
                 self.status_var.set(f"Opened {tab.title}")
         if tab.kind == "class":
             self._select_class_in_tree(tab.dalvik_class)
+            self._complete_pending_member_navigation(tab.dalvik_class)
 
     def close_tab(self, index : int):
         if index < 0 or index >= len(self.editor_tabs):
             return
         self._remember_active_view()
+        closing_tab = self.editor_tabs[index]
         was_active = index == self.active_tab_idx
         self.editor_tabs.pop(index)
+        if (
+            self._pending_member_navigation is not None
+            and self._pending_member_navigation[0] == closing_tab.dalvik_class
+        ):
+            self._pending_member_navigation = None
         if not self.editor_tabs:
             self.active_tab_idx = -1
             self.editor_tab_bar.tab_scroll_index = 0
@@ -897,6 +1043,7 @@ class AscGuiApp:
             return
         self.editor_tabs = []
         self.active_tab_idx = -1
+        self._pending_member_navigation = None
         self.editor_tab_bar.tab_scroll_index = 0
         self.editor_tab_bar.redraw()
         self._show_empty_editor()
@@ -918,13 +1065,15 @@ class AscGuiApp:
     def _prev_tab(self, _event = None):
         return self._cycle_tab(-1)
 
-    def _finish_open_tab(self, dalvik_class : str, dex_name : str, source : str):
+    def _finish_open_tab(self, dalvik_class : str, dex_name : str, source : str, member_references):
         idx = self._find_tab_index(dalvik_class)
         if idx is None:
             return
         tab = self.editor_tabs[idx]
         tab.dex_name = dex_name
-        tab.source = decode_java_unicode_escapes(source)
+        tab.source, tab.member_references = decode_java_unicode_escapes_with_ranges(
+            source, member_references
+        )
         tab.edited_source = ""
         tab.loading = False
         tab.error = ""
@@ -933,6 +1082,8 @@ class AscGuiApp:
         self.editor_tab_bar.ensure_visible(idx if idx == self.active_tab_idx else self.active_tab_idx)
         self.editor_tab_bar.redraw()
         self.status_var.set(f"Opened {dalvik_to_dot(dalvik_class)} from {dex_name}")
+        if idx == self.active_tab_idx:
+            self._complete_pending_member_navigation(dalvik_class)
 
     def _fail_open_tab(self, dalvik_class : str, message : str):
         idx = self._find_tab_index(dalvik_class)
@@ -942,6 +1093,11 @@ class AscGuiApp:
         tab = self.editor_tabs[idx]
         tab.loading = False
         tab.error = message
+        if (
+            self._pending_member_navigation is not None
+            and self._pending_member_navigation[0] == dalvik_class
+        ):
+            self._pending_member_navigation = None
         if idx == self.active_tab_idx:
             self._show_tab(tab)
         self.editor_tab_bar.redraw()
@@ -1417,6 +1573,9 @@ class AscGuiApp:
         if old_name == new_name:
             return
         source = tab.edited_source or tab.source
+        renamed_spans = identifier_occurrences_in_range(
+            source, method_range[0], method_range[1], old_name
+        )
         new_source, count = rename_identifier_in_range(
             source,
             method_range[0],
@@ -1428,6 +1587,9 @@ class AscGuiApp:
             self.status_var.set(f"No occurrences of {old_name} in current method")
             return
         tab.edited_source = new_source
+        tab.member_references = remap_ranges_after_replacements(
+            tab.member_references, renamed_spans, len(new_name)
+        )
         try:
             tab.insert_index = self.source_text.index("insert")
             tab.yview = self.source_text.yview()
@@ -1465,8 +1627,10 @@ class AscGuiApp:
         def worker():
             try:
                 _debug_log(self.debug, "app", f"open class worker start class={dalvik_class}")
-                dex_name, source = self.store.get_source(dalvik_class)
-                self.events.put(("source_done", dalvik_class, dex_name, source))
+                dex_name, source, member_references = self.store.get_source_with_metadata(dalvik_class)
+                self.events.put((
+                    "source_done", dalvik_class, dex_name, source, member_references
+                ))
                 _debug_log(self.debug, "app", f"open class worker done class={dalvik_class} dex={dex_name}")
             except Exception as e:
                 if self.debug:
@@ -1475,7 +1639,7 @@ class AscGuiApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _start_search(self):
+    def _start_search(self, exact_member : bool = False):
         if self.store is None:
             return
         if self.search_inflight:
@@ -1531,6 +1695,7 @@ class AscGuiApp:
                     value=value,
                     class_name=class_name or None,
                     fuzzy_class=fuzzy_class,
+                    exact_member=exact_member,
                     max_workers=self.max_workers,
                     progress_callback=lambda done, total, hit_count: self.events.put(
                         ("search_progress", done, total, hit_count)

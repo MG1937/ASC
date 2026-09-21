@@ -79,3 +79,24 @@ def decode_java_unicode_escapes(text : str):
     if pending_high is not None:
         out.append(pending_high_raw)
     return "".join(out)
+
+
+def decode_java_unicode_escapes_with_ranges(text : str, ranges):
+    if not ranges or "\\u" not in text:
+        return decode_java_unicode_escapes(text), list(ranges)
+
+    points = sorted({point for item in ranges for point in item[:2]})
+    mapped = {}
+    source_pos = 0
+    decoded_pos = 0
+    for point in points:
+        decoded_pos += len(decode_java_unicode_escapes(text[source_pos:point]))
+        mapped[point] = decoded_pos
+        source_pos = point
+
+    decoded = decode_java_unicode_escapes(text)
+    adjusted = [
+        (mapped[item[0]], mapped[item[1]], *item[2:])
+        for item in ranges
+    ]
+    return decoded, adjusted
