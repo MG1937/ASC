@@ -39,6 +39,16 @@ def revision(root):
     return subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
 
 
+def _stable_cli_findrefs_answer(text):
+    # String decoding fixes may intentionally change matched payload text while
+    # preserving the referenced DEX/method rows and their count.
+    return sorted(
+        line.split(' | matched=', 1)[0]
+        for line in text.splitlines()
+        if ' | ' in line
+    )
+
+
 def _wrap_workload_test(root, directory, test_name):
     """Wrap a workload test file so old top-level imports (findrefs, utils, core, models)
     are rewritten to droidasc.asc_core.*, matching the current package structure."""
@@ -95,8 +105,11 @@ def measure(root, directory, case, output, sample):
         if match is None:
             raise ValueError('missing CLI timing')
         times = {case: float(match[1])}
-        answer = (result.stdout.split('-' * 50)[-1].strip() if case == 'cli_getclass' else
-                  sorted(line for line in result.stdout.splitlines() if ' | ' in line))
+        answer = (
+            result.stdout.split('-' * 50)[-1].strip()
+            if case == 'cli_getclass'
+            else _stable_cli_findrefs_answer(result.stdout)
+        )
     if not answer or (case in ('core', 'cli_getclass') and 'class ClockFaceView' not in answer):
         raise ValueError(f'{case}: missing result')
     return times, answer
