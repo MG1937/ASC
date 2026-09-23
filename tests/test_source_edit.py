@@ -57,6 +57,20 @@ class _NavigationText:
         self.tags.append(("raise", name))
 
 
+class _FindWidget:
+    def __init__(self):
+        self.calls = []
+
+    def grid(self):
+        self.calls.append("grid")
+
+    def focus_set(self):
+        self.calls.append("focus")
+
+    def selection_range(self, start, end):
+        self.calls.append(("selection", start, end))
+
+
 def _text_index(text, offset):
     line = text.count("\n", 0, offset) + 1
     line_start = text.rfind("\n", 0, offset) + 1
@@ -88,6 +102,26 @@ def _make_app(source, references, offset):
 
 
 class SourceEditTests(unittest.TestCase):
+    def test_ctrl_f_clears_member_underlines_before_moving_focus(self):
+        calls = []
+        frame = _FindWidget()
+        entry = _FindWidget()
+        app = SimpleNamespace(
+            _hide_member_links=lambda: calls.append("hide-links"),
+            editor_find_frame=frame,
+            editor_find_entry=entry,
+            editor_find_var=_Value("needle"),
+            _last_editor_find_text="",
+            _refresh_editor_find_marks=lambda reset_cursor: calls.append(("refresh", reset_cursor)),
+        )
+
+        result = AscGuiApp._show_editor_find(app)
+
+        self.assertEqual(result, "break")
+        self.assertEqual(calls[0], "hide-links")
+        self.assertEqual(frame.calls, ["grid"] )
+        self.assertEqual(entry.calls[0], "focus")
+
     def test_rendered_member_ranges_follow_inserted_line_comments(self):
         source = "void first() {}\nvoid second() {}\n"
         first = source.index("first")

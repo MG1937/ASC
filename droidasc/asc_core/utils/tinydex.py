@@ -9,6 +9,18 @@ _STRUCT_III = struct.Struct('<III')
 _STRUCT_HHI = struct.Struct('<HHI')
 _STRUCT_HHHHII = struct.Struct('<HHHHII')
 
+def _decode_mutf8_fallback(raw : bytes) -> str:
+    raw = raw.replace(b'\xc0\x80', b'\x00')
+    try:
+        return (
+            raw.decode('utf-8', errors='surrogatepass')
+            .encode('utf-16-le', errors='surrogatepass')
+            .decode('utf-16-le', errors='replace')
+        )
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return raw.decode('utf-8', errors='replace')
+
+
 class DEXHeader:
     def __init__(self, buf):
         # (off, size)
@@ -348,12 +360,31 @@ class DEX:
             return self._strings[str_idx]
 
         str_idx_off = self.header.strings[0]
-        str_size = self.header.strings[1]
         string_off = _STRUCT_I.unpack_from(self.buf, str_idx_off + str_idx * 4)[0]
         utf16_size, c = read_uleb128_fast(self.buf, string_off)
         data_start = string_off + c
         end = data_start + utf16_size
-        s = bytes(self.buf[data_start:end]).decode('utf-8', errors='replace')
+        # ASCII keeps the old O(1) boundary calculation; MUTF-8 needs its terminator.
+        # refer to https://github.com/MG1937/ASC/issues/33
+        # 20260923 DEX.get_string slices utf16_size bytes out of a string_data_item, but that field counts UTF-16 code units
+        if end >= len(self.buf) or self.buf[end] != 0:
+            raw_buf = self.buf.obj
+            if hasattr(raw_buf, 'find') and len(raw_buf) == len(self.buf):
+                end = raw_buf.find(b'\x00', data_start, len(self.buf))
+            else:
+                end = data_start
+                while end < len(self.buf) and self.buf[end] != 0:
+                    end += 1
+                if end == len(self.buf):
+                    end = -1
+            if end < 0:
+                raise ValueError("unterminated string_data_item")
+
+        raw = bytes(self.buf[data_start:end])
+        try:
+            s = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            s = _decode_mutf8_fallback(raw)
         self._strings[str_idx] = s
         return s
 
@@ -518,6 +549,14 @@ class DEX:
             else:
                 right = mid - 1
         
+        if type_idx == -1:
+            # DEX sorts by UTF-16 code units, while Python compares code points.
+            for mid in range(type_ids_size):
+                desc_idx = _STRUCT_I.unpack_from(raw_bytes, type_ids_off + mid * 0x4)[0]
+                if self.get_string(desc_idx) == fullname:
+                    type_idx = mid
+                    break
+
         if type_idx == -1:
             return None
 
