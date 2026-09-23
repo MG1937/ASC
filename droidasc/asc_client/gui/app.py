@@ -458,6 +458,7 @@ class AscGuiApp:
         self.root.bind("<Control-Shift-Tab>", self._prev_tab)
         self.source_text.bind("<Button-1>", self._set_editor_cursor_from_click)
         self.source_text.bind("<Control-Button-1>", self._open_member_from_click)
+        self.source_text.bind("<FocusOut>", self._hide_member_links, add="+")
         self.root.bind("<KeyPress-Control_L>", self._show_member_links)
         self.root.bind("<KeyPress-Control_R>", self._show_member_links)
         self.root.bind("<KeyRelease-Control_L>", self._hide_member_links)
@@ -1318,6 +1319,7 @@ class AscGuiApp:
         apply_chunk()
 
     def _show_editor_find(self, _event = None):
+        self._hide_member_links()
         self.editor_find_frame.grid()
         self.editor_find_entry.focus_set()
         self.editor_find_entry.selection_range(0, tk.END)
