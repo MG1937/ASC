@@ -58,3 +58,21 @@ line. With `-o`, output is written to the selected file instead of stdout.
 `Lcom/poc` is kept unchanged.
 
 You can also use `python main.py` as before — it delegates to the same entry point.
+
+# Sponsors
+
+| Sponsor | Amount |
+| --- | ---: |
+| [HTTChina](https://github.com/HTTChina) | 5000¥ |
+| [c01ns](https://github.com/c01ns) | 11.9¥ |
+| [gguowang](https://github.com/gguowang) AND [cococount](https://github.com/cococount) | 2¥ |
+
+Thank you to all sponsors for your support!  
+
+ASC is built with the hope that it can genuinely help everyone improve their reverse engineering workflow — from speeding up the tedious parts to making the impossible feel routine.
+
+# Acknowledgements
+
+Thanks to the [Androguard](https://github.com/androguard/androguard) project
+for providing the Android reverse-engineering and DEX analysis foundation used
+by Droid ASC.
