@@ -63,9 +63,9 @@ You can also use `python main.py` as before — it delegates to the same entry p
 
 | Sponsor | Amount |
 | --- | ---: |
-| [HTTChina](https://github.com/HTTChina) | 5000¥ |
-| [c01ns](https://github.com/c01ns) | 11.9¥ |
-| [gguowang](https://github.com/gguowang) AND [cococount](https://github.com/cococount) | 2¥ |
+| [HTTChina](https://github.com/HTTChina) | 5000￥ |
+| [c01ns](https://github.com/c01ns) | 11.9￥ |
+| [gguowang](https://github.com/gguowang) AND [cococount](https://github.com/cococount) | 2￥ |
 
 Thank you to all sponsors for your support!  
 
