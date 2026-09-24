@@ -12,11 +12,10 @@ The regression runner fails if Androguard is missing or any test is skipped in
 strict mode. It covers index zero, empty/fallback instruction maps, string layout,
 zeroed reconstructed DEX signatures/checksums, dummy imports, the MUTF-8 shim,
 CLI stored/Deflate multidex operation, GUI data-store reuse, and reference searches
-without site packages. `listclass` coverage includes local class-table
-enumeration, stable DEX definition order, normalized package-prefix filtering,
-stored/Deflate multidex APKs, DEX 041 containers, malformed indices, operation
-without site packages, and a large-tail Deflate fixture. It does not open GUI
-windows.
+without site packages. It does not open GUI windows.
+GUI startup tests cover the `--gui` flag, macOS foreground execution, missing Tk
+diagnostics, debug tracebacks, and relative APK paths in detached launches using
+a stub GUI; native window rendering still requires a Tk-enabled desktop Python.
 
 The synthetic startup gate measures `getclass --debug` in nine fresh interpreters.
 Its median budgets are 100 ms internal time and 250 ms wall time on Linux CI.
