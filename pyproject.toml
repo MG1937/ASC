@@ -12,10 +12,12 @@ license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "androguard>=4.1.3",
+    "mcp>=2.0,<3",
 ]
 
 [project.scripts]
 droidasc = "droidasc:main"
+droidasc-mcp = "droidasc.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["droidasc", "droidasc.*"]
