@@ -74,9 +74,14 @@ class AscHandler:
         method = dex.methods[midx]
         return f"{method.cls.fullname}->{method.name}"
 
+    _MATCHED_NAME_MAX_LEN = 200
+
     def _format_matched_name(self, dex, find_type : str, idx : int) -> str:
         if find_type == "string":
-            return str(dex.strings[idx])
+            s = str(dex.strings[idx])
+            if len(s) > self._MATCHED_NAME_MAX_LEN:
+                return s[: self._MATCHED_NAME_MAX_LEN] + "..."
+            return s
         if find_type == "type":
             return dex.types[idx].descriptor
         if find_type == "method":
