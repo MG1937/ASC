@@ -1,5 +1,5 @@
 import struct
-from models.dvm_opcode import Format
+from ..models.dvm_opcode import Format
 
 # https://cs.android.com/android/platform/superproject/+/android-latest-release:art/libdexfile/dex/dex_instruction-inl.h
 

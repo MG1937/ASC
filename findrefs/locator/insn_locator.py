@@ -1,8 +1,8 @@
-from findrefs.locator.base_locator import BaseLocator
-from utils.leb128 import read_uleb128_fast, read_uleb128_len
+from .base_locator import BaseLocator
+from ...utils.leb128 import read_uleb128_fast, read_uleb128_len
 from collections import defaultdict
 
-import models.dvm_opcode
+from ...models import dvm_opcode
 
 import re
 import struct
@@ -46,7 +46,7 @@ class InsnLocator(BaseLocator):
     def _build_insn_verify(self):
         # build INSN VERIFY for insn mismatch issue
         insns = {1:[], 2:[], 3:[], 4:[], 5:[]}
-        opcodes = models.dvm_opcode.opcodes
+        opcodes = dvm_opcode.opcodes
         for opcode in opcodes:
             insns[opcodes[opcode].oplen].append(opcode)
         insns_re = []
@@ -54,7 +54,16 @@ class InsnLocator(BaseLocator):
             insns_re.append(b"[" + re.escape(bytes(insns[oplen])) + b"]" +
                     b"." * (oplen * 2 - 1)) # -1 for exclude opcode itself
         # utilzes c-regex cap for fast matching, rather than performing linear matching in py 
-        InsnLocator.INSN_VERIFY = re.compile(b"(?>(?:" + b"|".join(insns_re) + b")*)", re.DOTALL)
+        body = b"|".join(insns_re)
+        # The atomic group keeps the greedy star from backtracking over the instruction ranges
+        # that fail to verify, which is the common case on a real DEX. It is pure optimisation,
+        # but it is also Python 3.11+ syntax: pyproject declares requires-python >=3.10, where
+        # re.compile raises "unknown extension ?>" and every reference search and decompile dies
+        # at import. Keep it where the interpreter understands it, fall back otherwise.
+        try:
+            InsnLocator.INSN_VERIFY = re.compile(b"(?>(?:" + body + b")*)", re.DOTALL)
+        except re.error:
+            InsnLocator.INSN_VERIFY = re.compile(b"(?:" + body + b")*", re.DOTALL)
 
     def _encoded_method_parse(self, data : bytes, pos, midx):
         if pos == 0:
@@ -71,7 +80,7 @@ class InsnLocator(BaseLocator):
 
         old = insn_maps.get(insn_bucket_start)
         # R8 insn deduplicate machenism, different method may refer to same insn body
-        if old:
+        if old is not None:
             if isinstance(old, int):
                 midx = [midx, old]
             else:
@@ -119,7 +128,11 @@ class InsnLocator(BaseLocator):
         # dont reuse tinydex, frequent lazy parser may cause bad performance
         # parse all items in one shot by map!
         buf = self.buf
+        if not self.mapoff:
+            self._build_map_bydef()
+            return
         mapsize = _STRUCT_I.unpack_from(buf, self.mapoff)[0]
+        mtype = None
         mapoff = self.mapoff + 4
         for i in range(mapsize):
             mtype = _STRUCT_H.unpack_from(buf, mapoff)[0]
@@ -140,6 +153,7 @@ class InsnLocator(BaseLocator):
         if self.parsed:
             return
         class_def_off, class_def_size = self.header.classes
+        buf = self.buf
         data = bytes(buf)
         for i in range(class_def_size):
             class_data_off = _STRUCT_I.unpack_from(buf, class_def_off + 24)[0]
@@ -154,8 +168,9 @@ class InsnLocator(BaseLocator):
         t_start = time.perf_counter() if self.debug else None
         self._build_map_bymap()
         tmp_list = self.insn_maps.keys()
-        self.code_item_start = min(tmp_list) << 4
-        self.code_item_end = (max(tmp_list) + 1) << 4
+        if tmp_list:
+            self.code_item_start = min(tmp_list) << 4
+            self.code_item_end = (max(tmp_list) + 1) << 4
         self.parsed = True
         self._debug_log("parse", t_start, len(self.insn_maps))
 
@@ -169,7 +184,7 @@ class InsnLocator(BaseLocator):
         insn_maps = self.insn_maps
 
         buf = self.buf
-        method_bounds = self.method_bounds.copy()
+        method_bounds = {}
         for off in offsets:
             midx = insn_maps.get(off >> 4)
             """
@@ -184,10 +199,10 @@ class InsnLocator(BaseLocator):
             # which means there is no possible to backtracking inside one method, so we can update method
             # start insn offset once we fullmatch an insn, avoid re-fullmatch from start of method
             # bugfix for insn mismatch issue 20260729
-            if isinstance(midx, int) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds[midx], off):
+            if isinstance(midx, int) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds.get(midx, self.method_bounds[midx]), off):
                 ret_table.append(midx)
                 method_bounds[midx] = off
-            elif isinstance(midx, list) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds[midx[0]], off):
+            elif isinstance(midx, list) and InsnLocator.INSN_VERIFY.fullmatch(buf, method_bounds.get(midx[0], self.method_bounds[midx[0]]), off):
                 ret_table.append(midx)
                 method_bounds[midx[0]] = off
             else:

@@ -2,12 +2,12 @@ import os
 import time
 import mmap
 
-from utils.tinydex import DEX
-from core.dvm_interpreter import DvmInterpreter
-from core.dvm_handlers import IndexHandler
-from core.dex.dex_remapper import DexIndexMapper
-from core.dex.dex_constructor import DexHollower
-from core.dex.dex_builder import DexBuilder
+from ...utils.tinydex import DEX
+from ..dvm_interpreter import DvmInterpreter
+from ..dvm_handlers import IndexHandler
+from .dex_remapper import DexIndexMapper
+from .dex_constructor import DexHollower
+from .dex_builder import DexBuilder
 
 # this part gen by LLM, I already build the infra, let LLM arrange this
 
@@ -58,6 +58,9 @@ class DexManager:
         idx_handler = IndexHandler()
         dvminterp = DvmInterpreter()
         dvminterp.addHandler(idx_handler)
+
+        # Pin own-field declaration order before any bytecode is rewritten.
+        idx_handler.preregister_own_fields(clazz.fields)
 
         modified_bytecodes = {}
         

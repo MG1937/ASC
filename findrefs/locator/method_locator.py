@@ -1,4 +1,4 @@
-from findrefs.locator.base_locator import BaseLocator
+from .base_locator import BaseLocator
 from collections import defaultdict
 import struct
 import time
@@ -39,27 +39,6 @@ class MethodLocator(BaseLocator):
         self.parsed = True
         self._debug_log("build_map", t_start, method_ids_size)
 
-    # which is different with type locator, this func for precise clz name
-    # while type locator is for fuzzy search
-    def _find_type_idx_precisely(self, clz : str):
-        left = 0
-        type_ids_off, type_ids_size = self.header.types
-        right = type_ids_size - 1
-        buf = self.buf
-        strings = self.dex.strings
-
-        while left <= right:
-            mid = (left + right) >> 1
-            desc_idx = _STRUCT_I.unpack_from(buf, type_ids_off + (mid << 2))[0]
-            desc = strings[desc_idx]
-            if desc == clz:
-                return mid
-            if desc < clz:
-                left = mid + 1
-            else:
-                right = mid - 1
-        return -1
-
     def _collect_clz_mids(self, type_idxs) -> set:
         ret = set()
         clz_maps = self.clz_maps
@@ -69,11 +48,12 @@ class MethodLocator(BaseLocator):
                 ret.update(mids)
         return ret
 
-    def _match_clz_mids(self, clz_mids : set, method : str) -> set:
+    def _match_clz_mids(self, clz_mids : set, method : str, precise : bool = False) -> set:
         ret = set()
         methods = self.dex.methods
         for mid in clz_mids:
-            if methods[mid].name.find(method) != -1:
+            matches = methods[mid].name == method if precise else method in methods[mid].name
+            if matches:
                 ret.add(mid)
         return ret
 
@@ -90,6 +70,9 @@ class MethodLocator(BaseLocator):
 
         clz = find.get("class")
         method = find.get("method")
+        method_precise = False
+        if isinstance(method, (list, tuple)):
+            method, method_precise = method
         clz_precise = True
         if clz is not None:
             clz, clz_precise = clz
@@ -102,6 +85,14 @@ class MethodLocator(BaseLocator):
             return set()
 
         if clz is None:
+            if method_precise:
+                # dex.methods is a proxy without __iter__, so enumerate() falls back
+                # to the sequence protocol and never sees an IndexError - it walks off
+                # the method table into garbage. Bound the walk by the table size.
+                return {
+                    mid for mid in range(len(self.dex.methods))
+                    if self.dex.methods[mid].name == method
+                }
             name_idxs = self.str_locator.locate(method)
             method_maps = self.method_maps
             ret = set()
@@ -114,7 +105,7 @@ class MethodLocator(BaseLocator):
             return ret
 
         if clz_precise:
-            type_idx = self._find_type_idx_precisely(clz)
+            type_idx = self.type_locator._find_type_idx_precisely(clz)
             if type_idx == -1:
                 self._debug_log("locate", t_start, 0)
                 return set()
@@ -132,10 +123,12 @@ class MethodLocator(BaseLocator):
             self._debug_log("locate", t_start, len(clz_mids))
             return clz_mids
         if clz_precise:
-            ret = self._match_clz_mids(clz_mids, method)
+            ret = self._match_clz_mids(clz_mids, method, method_precise)
             self._debug_log("locate", t_start, len(ret))
             return ret
 
+        if method_precise:
+            return self._match_clz_mids(clz_mids, method, True)
         name_idxs = self.str_locator.locate(method)
         ret = set()
         for name_idx in name_idxs:

@@ -1,5 +1,7 @@
-import models.dvm_opcode as dvm_opcode
-from models.dvm_opcode import DvmOpcode
+from ..models import dvm_opcode
+from ..models.dvm_opcode import DvmOpcode
+
+# `dvm_opcode` is the module; `DvmOpcode` is the class
 
 # Auth: MG1937
 

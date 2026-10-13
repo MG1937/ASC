@@ -1,4 +1,4 @@
-from utils.tinydex import DEX 
+from ...utils.tinydex import DEX
 import time
 
 # Auth: MG1937

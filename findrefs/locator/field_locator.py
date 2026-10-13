@@ -1,4 +1,4 @@
-from findrefs.locator.base_locator import BaseLocator
+from .base_locator import BaseLocator
 from collections import defaultdict
 import struct
 import time
@@ -17,7 +17,7 @@ class FieldLocator(BaseLocator):
         self.field_maps = defaultdict(set) # {name_idx : {field_idx, ...}}
 
     def set_str_locator(self, locator):
-        self.str_locator = locator    
+        self.str_locator = locator
 
     def set_type_locator(self, locator):
         self.type_locator = locator
@@ -40,27 +40,6 @@ class FieldLocator(BaseLocator):
         self.parsed = True
         self._debug_log("build_map", t_start, field_ids_size)
 
-    # which is different with type locator, this func for precise clz name
-    # while type locator is for fuzzy search
-    def _find_type_idx_precisely(self, clz : str):
-        left = 0
-        type_ids_off, type_ids_size = self.header.types
-        right = type_ids_size - 1
-        buf = self.buf
-        strings = self.dex.strings
-
-        while left <= right:
-            mid = (left + right) >> 1
-            desc_idx = _STRUCT_I.unpack_from(buf, type_ids_off + (mid << 2))[0]
-            desc = strings[desc_idx]
-            if desc == clz:
-                return mid
-            if desc < clz:
-                left = mid + 1
-            else:
-                right = mid - 1
-        return -1
-
     def _collect_clz_fids(self, type_idxs) -> set:
         ret = set()
         clz_maps = self.clz_maps
@@ -70,11 +49,12 @@ class FieldLocator(BaseLocator):
                 ret.update(fids)
         return ret
 
-    def _match_clz_fids(self, clz_fids : set, field : str) -> set:
+    def _match_clz_fids(self, clz_fids : set, field : str, precise : bool = False) -> set:
         ret = set()
         fields = self.dex.fields
         for fid in clz_fids:
-            if fields[fid].name.find(field) != -1:
+            matches = fields[fid].name == field if precise else field in fields[fid].name
+            if matches:
                 ret.add(fid)
         return ret
 
@@ -91,6 +71,9 @@ class FieldLocator(BaseLocator):
 
         clz = find.get("class")
         field = find.get("field")
+        field_precise = False
+        if isinstance(field, (list, tuple)):
+            field, field_precise = field
         clz_precise = True
         if clz is not None:
             clz, clz_precise = clz
@@ -103,6 +86,13 @@ class FieldLocator(BaseLocator):
             return set()
 
         if clz is None:
+            if field_precise:
+                # see MethodLocator.locate: dex.fields is a proxy without __iter__,
+                # so enumerate() walks off the field table instead of stopping at it
+                return {
+                    fid for fid in range(len(self.dex.fields))
+                    if self.dex.fields[fid].name == field
+                }
             name_idxs = self.str_locator.locate(field)
             field_maps = self.field_maps
             ret = set()
@@ -115,7 +105,7 @@ class FieldLocator(BaseLocator):
             return ret
 
         if clz_precise:
-            type_idx = self._find_type_idx_precisely(clz)
+            type_idx = self.type_locator._find_type_idx_precisely(clz)
             if type_idx == -1:
                 self._debug_log("locate", t_start, 0)
                 return set()
@@ -133,10 +123,12 @@ class FieldLocator(BaseLocator):
             self._debug_log("locate", t_start, len(clz_fids))
             return clz_fids
         if clz_precise:
-            ret = self._match_clz_fids(clz_fids, field)
+            ret = self._match_clz_fids(clz_fids, field, field_precise)
             self._debug_log("locate", t_start, len(ret))
             return ret
 
+        if field_precise:
+            return self._match_clz_fids(clz_fids, field, True)
         name_idxs = self.str_locator.locate(field)
         ret = set()
         for name_idx in name_idxs:

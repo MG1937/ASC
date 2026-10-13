@@ -1,4 +1,4 @@
-from findrefs.locator.base_locator import BaseLocator
+from .base_locator import BaseLocator
 from collections import defaultdict
 import struct
 import time
@@ -12,9 +12,31 @@ class TypeLocator(BaseLocator):
         self.str_locator = None
         self.parsed = False
         self.type_maps = defaultdict(set) # {str_idx : {type_idx, ...}}
-        
+
     def set_str_locator(self, locator):
         self.str_locator = locator
+
+    def _find_type_idx_precisely(self, clz : str):
+        left = 0
+        type_ids_off, type_ids_size = self.header.types
+        right = type_ids_size - 1
+        buf = self.buf
+        strings = self.dex.strings
+        # see MethodLocator._find_type_idx_precisely: type_ids is sorted by UTF-16
+        # code unit, so the search has to compare in that order, not Python's
+        key = clz.encode('utf-16-be', 'surrogatepass')
+
+        while left <= right:
+            mid = (left + right) >> 1
+            desc_idx = _STRUCT_I.unpack_from(buf, type_ids_off + (mid << 2))[0]
+            desc = strings[desc_idx]
+            if desc == clz:
+                return mid
+            if desc.encode('utf-16-be', 'surrogatepass') < key:
+                left = mid + 1
+            else:
+                right = mid - 1
+        return -1
 
     def _build_map(self):
         if self.parsed:

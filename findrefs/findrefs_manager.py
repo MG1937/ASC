@@ -1,10 +1,11 @@
 # Auth: MG1937
-from findrefs.locator.insn_locator import InsnLocator
-from findrefs.locator.field_locator import FieldLocator
-from findrefs.locator.method_locator import MethodLocator
-from findrefs.locator.string_locator import StringLocator
-from findrefs.locator.type_locator import TypeLocator
-from findrefs.scan.code_item_scan import CodeItemScanner
+from .locator.insn_locator import InsnLocator
+from .locator.field_locator import FieldLocator
+from .locator.method_locator import MethodLocator
+from .locator.string_locator import StringLocator
+from .locator.type_locator import TypeLocator
+from .scan.code_item_scan import CodeItemScanner
+from .scan.class_def_item_scan import ClassDefItemScan
 
 
 class FindRefManager:
@@ -17,6 +18,7 @@ class FindRefManager:
         self.field_locator = None
         self.insn_locator = None
         self.code_scanner = None
+        self.class_def_item_scanner = None
 
     def _get_str_locator(self, build = False):
         locator = self.str_locator
@@ -33,7 +35,7 @@ class FindRefManager:
         if locator is None:
             locator = TypeLocator(self.dex)
             locator.set_debug(self.debug)
-            locator.set_str_locator(self._get_str_locator(True))
+            locator.set_str_locator(self._get_str_locator(build))
             self.type_locator = locator
         if build and not locator.parsed:
             locator._build_map()
@@ -78,9 +80,25 @@ class FindRefManager:
             self.code_scanner = scanner
         return scanner
 
-    # find struct: {"string" : "foo", "type" : "bar", "method" : {...}, "field" : {...}}
+    def _get_class_def_item_scanner(self):
+        scanner = self.class_def_item_scanner
+        if scanner is None:
+            # precisly locate type id, no need to build string/type map
+            scanner = ClassDefItemScan(self._get_type_locator(False))
+            self.class_def_item_scanner = scanner
+        return scanner
+
+    # find struct: {"string" : "foo", "type" : "bar", "method" : {...}, "field" : {...}, "extends" : "Lfoo;"}
     # locate result will overwrite input find in-place, then scanner writes ref mids back into each key
+    # extends writes class idx back into find and returns directly, dont scan code item
     def find_ref(self, find : dict, mark = False):
+        if "extends" in find:
+            find["extends"] = self._get_class_def_item_scanner().scan_extends(find["extends"])
+            return find["extends"]
+        if "impl" in find:
+            find["impl"] = self._get_class_def_item_scanner().scan_implements(find["impl"])
+            return find["impl"]
+
         has_idx = False
         if "string" in find:
             find["string"] = self._get_str_locator(True).locate(find["string"])

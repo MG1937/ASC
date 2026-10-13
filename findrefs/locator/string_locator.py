@@ -1,5 +1,6 @@
-from findrefs.locator.base_locator import BaseLocator
+from .base_locator import BaseLocator
 import struct
+from ...utils.leb128 import read_uleb128_len
 import re
 import time
 
@@ -23,25 +24,42 @@ class StringLocator(BaseLocator):
         string_ids_off, string_ids_size = self.header.strings
         stridx_map = self.stridx_map
         buf = self.buf
+        if not string_ids_size:
+            self.parsed = True
+            self._debug_log("build_map", t_start, 0)
+            return
         # might buggy.. r8 not specify the first string data off is the begging of all string data off, but usually it was...
         self.strdata_start = _STRUCT_I.unpack_from(buf, string_ids_off)[0]
         for idx in range(string_ids_size):
             data_offset = _STRUCT_I.unpack_from(buf, string_ids_off)[0]
             string_ids_off += 4
             stridx_map[data_offset] = idx
-        self.strdata_end = data_offset
+        # Include the final string_data_item. The existing lookup maps a
+        # match through the following string offset, so add an end sentinel
+        # for the final item without changing that mapping scheme.
+        self.strdata_end = buf.obj.find(
+            b'\x00', data_offset + read_uleb128_len(buf, data_offset)
+        ) + 1
+        stridx_map[self.strdata_end] = string_ids_size
         self.parsed = True
         self._debug_log("build_map", t_start, len(stridx_map))
 
     def _match_string_offset(self, string : str):
         buf = self.buf
-        string = string.encode('utf-8')
+        # the region below holds MUTF-8, where a code point above the BMP is stored
+        # as a surrogate pair (CESU-8) that a UTF-8 pattern can never match. The two
+        # encodings agree below the BMP, so only such a pattern pays for the encoder
+        # and an ordinary search stays on the plain UTF-8 path.
+        pattern_bytes = string.encode('utf-8')
+        if any(ord(ch) > 0xFFFF for ch in string):
+            from mutf8 import encode_modified_utf8
+            pattern_bytes = encode_modified_utf8(string)
         strdata_start = self.strdata_start
         strdata_end = self.strdata_end
         submem = buf[strdata_start: strdata_end]
         
         mm = submem.obj
-        pattern = re.compile(string)
+        pattern = re.compile(pattern_bytes)
         
         # offsets = []
         for match in pattern.finditer(submem):
