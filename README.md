@@ -2,6 +2,18 @@
 
 [中文说明](README.zh-CN.md)
 
+> **⚠️ Notice — unmaintained, please migrate**
+>
+> **rasc is no longer actively maintained.**
+>
+> rasc does **not** aim for a faithful (1:1) re-implementation of ASC. Parts of its
+> engineering diverge from ASC, and as a result some features suffer degraded
+> performance compared with a strict translation.
+>
+> A separate, strictly 1:1 Rust rewrite of ASC is being developed at
+> **[MG1937/rust_ASC](https://github.com/MG1937/rust_ASC)** — please **move to this
+> repository** for ongoing work.
+
 ## What rasc is
 
 rasc is a Rust re-implementation of ASC: an APK/DEX analysis tool **built as an experiment,
