@@ -1,5 +1,7 @@
 # Droid ASC: R8 Compiler Optimization as a DeCompiler Primitive
 
+[![Featured on Made with REA](https://madewithrea.com/badges/featured.svg)](https://madewithrea.com/builds/droid-asc-fast-android-decompiler-built-for-agents-and-mobile-research)
+
 > **Rust version:** This project has been rewritten 1:1 in Rust as [rust_ASC](https://github.com/MG1937/rust_ASC). The Rust version is 10× faster and supports full APK decompilation: with 16 threads, it decompiles a 383 MB APK in just 4 seconds.
 >
 > If your workflow is written in Python, you can continue integrating with this project; it remains the fastest Python Android decompiler available. If you only need a binary, please use [rust_ASC](https://github.com/MG1937/rust_ASC).
