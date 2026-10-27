@@ -183,6 +183,68 @@ def _handle_listclass(args):
         print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.2f} us")
 
 
+def _handle_batch(args):
+    from droidasc.asc_client import batch
+
+    log = print if args.debug else None
+    index = batch.index_apk(args.apk_path, args.prefix, log)
+    if not index:
+        raise ValueError("No classes matched the requested selection.")
+
+    if args.from_file:
+        requested = batch.read_class_list(args.from_file)
+        missing = [name for name in requested if name not in index]
+        if missing:
+            print(
+                f"Warning: {len(missing)} class(es) not in APK, first: {missing[0]}",
+                file=sys.stderr,
+            )
+        selected = [name for name in requested if name in index]
+        if not selected:
+            raise ValueError("None of the listed classes are present in the APK.")
+    else:
+        selected = sorted(index)
+
+    if args.limit:
+        selected = selected[: args.limit]
+
+    t_batch = time.perf_counter()
+    written = skipped = failed = 0
+    for position, name in enumerate(selected, 1):
+        dest = os.path.join(args.out_dir, batch.class_output_path(name))
+        if args.resume and os.path.exists(dest):
+            skipped += 1
+        else:
+            try:
+                source = batch.decompile(index, name)
+            except Exception as exc:  # one bad class must not abort the pass
+                failed += 1
+                print(f"[BATCH] failed: {name}: {exc}", file=sys.stderr)
+            else:
+                batch.write_source(dest, source)
+                written += 1
+        if position % 500 == 0 or position == len(selected):
+            elapsed = time.perf_counter() - t_batch
+            print(
+                f"[BATCH] {position}/{len(selected)} written={written} "
+                f"skipped={skipped} failed={failed} {position / elapsed:.1f} class/s",
+                file=sys.stderr,
+            )
+
+    print(
+        f"[BATCH] done written={written} skipped={skipped} failed={failed} "
+        f"in {time.perf_counter() - t_batch:.2f}s",
+        file=sys.stderr,
+    )
+
+    if args.debug:
+        t_end = time.perf_counter()
+        print(f"[DEBUG] Total Execution Time: {(t_end - t_start) * 1000000:.0f} us")
+
+    if failed == len(selected):
+        raise ValueError("Every selected class failed to decompile.")
+
+
 def _handle_getmanifest(args):
     from droidasc.asc_client.manifest_handler import get_manifest_xml
 
@@ -290,6 +352,8 @@ def main():
             _handle_disassemble(args)
         elif args.command == "listclass":
             _handle_listclass(args)
+        elif args.command == "batch":
+            _handle_batch(args)
         elif args.command == "getmanifest":
             _handle_getmanifest(args)
         elif args.command == "findrefs":
@@ -327,6 +391,8 @@ examples:
   droidasc listclass app.apk
   droidasc listclass app.apk -o classes.txt
   droidasc listclass app.apk --prefix com.poc
+  droidasc batch app.apk --prefix com.poc -o out/
+  droidasc batch app.apk --from-file classes.txt -o out/ --resume
   droidasc getmanifest app.apk
   droidasc getmanifest app.apk -o AndroidManifest.xml
   droidasc findrefs app.apk string token -o string_refs.txt
@@ -414,6 +480,47 @@ examples:
     )
     listclass_parser.add_argument("-o", "--output", help="Write class names to this file instead of stdout.")
     listclass_parser.add_argument("apk_path", help="Path to the input APK file.")
+
+    batch_parser = subparsers.add_parser(
+        "batch",
+        help="Decompile many classes in one APK pass, inflating each DEX exactly once.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  droidasc batch app.apk --prefix com.poc -o out/
+  droidasc batch app.apk --from-file classes.txt -o out/
+  droidasc batch app.apk --from-file classes.txt -o out/ --resume
+""",
+    )
+    batch_parser.add_argument("--debug", action="store_true", help="Enable debug profiling output.")
+    selection = batch_parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument(
+        "--from-file",
+        metavar="FILE",
+        help="Class list file: one name per line, dotted or Dalvik, # comments allowed.",
+    )
+    selection.add_argument(
+        "--prefix",
+        help="Decompile every class whose name starts with this prefix.",
+    )
+    batch_parser.add_argument(
+        "-o",
+        "--out-dir",
+        required=True,
+        help="Output directory; files mirror the package tree (com/poc/Main.java).",
+    )
+    batch_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip classes whose output file already exists.",
+    )
+    batch_parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Decompile at most N classes (0 means no limit).",
+    )
+    batch_parser.add_argument("apk_path", help="Path to the input APK file.")
 
     getmanifest_parser = subparsers.add_parser(
         "getmanifest",

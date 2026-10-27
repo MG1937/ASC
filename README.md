@@ -79,18 +79,20 @@ pip install .
 After installation, the `droidasc` CLI command is available globally:
 
 ```
-usage: droidasc [-h] {getclass,disassemble,listclass,getmanifest,findrefs} ...
+usage: droidasc [-h] {getclass,disassemble,listclass,batch,getmanifest,findrefs} ...
 
 ASC tooling entry (v0.1.2.post1).
 
 positional arguments:
-  {getclass,disassemble,listclass,getmanifest,findrefs}
+  {getclass,disassemble,listclass,batch,getmanifest,findrefs}
     getclass            Locate the target class in APK, extract one DEX in
                         memory, then decompile.
     disassemble         Extract a class, rebuild a small DEX, then disassemble
                         it with dadguard.
     listclass           List classes across all DEX entries; use --prefix to
                         filter by package/class prefix.
+    batch               Decompile many classes in one APK pass, inflating each
+                        DEX exactly once.
     getmanifest         Decode AndroidManifest.xml from APK and print it as
                         XML.
     findrefs            Find code references for string/type/method/field
@@ -110,6 +112,8 @@ examples:
   droidasc listclass app.apk
   droidasc listclass app.apk -o classes.txt
   droidasc listclass app.apk --prefix com.poc
+  droidasc batch app.apk --prefix com.poc -o out/
+  droidasc batch app.apk --from-file classes.txt -o out/ --resume
   droidasc getmanifest app.apk
   droidasc getmanifest app.apk -o AndroidManifest.xml
   droidasc findrefs app.apk string token -o string_refs.txt
@@ -133,6 +137,16 @@ extend a target class or implement a target interface, respectively.
 line. With `-o`, output is written to the selected file instead of stdout.
 `--prefix com.poc` filters by `Lcom/poc`; an already normalized prefix such as
 `Lcom/poc` is kept unchanged.
+
+`batch` decompiles many classes in a single APK pass. `getclass` reopens the
+APK and re-inflates DEX entries for every class it is asked for, so a
+classes.txt round-trip spends most of its time copying the same buffers; `batch`
+inflates each DEX once, indexes the classes it defines, then decompiles straight
+from those in-memory buffers. Select classes with `--prefix com.poc` or
+`--from-file classes.txt` (one name per line, dotted or Dalvik, `#` comments
+allowed); `-o/--out-dir` is required and files mirror the package tree
+(`com/poc/Main.java`). `--resume` skips classes whose output already exists and
+`--limit N` caps the run. Output is byte-identical to `getclass`.
 
 `disassemble` accepts the same dotted or Dalvik class formats as `getclass`.
 It extracts the target class from the APK, rebuilds a small DEX in memory, and
